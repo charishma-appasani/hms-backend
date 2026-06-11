@@ -10,6 +10,8 @@ async function bootstrap() {
     AppModule,
     new FastifyAdapter(),
   );
+  // Ensures OnModuleDestroy (PrismaService.$disconnect) runs on SIGINT/SIGTERM.
+  app.enableShutdownHooks();
   await app.listen(process.env.PORT ?? 3000, '0.0.0.0');
 }
 bootstrap();

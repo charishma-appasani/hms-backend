@@ -1,0 +1,490 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Get a free hosted Postgres database in seconds: `npx create-db`
+
+generator client {
+  provider     = "prisma-client"
+  output       = "../generated/prisma"
+  moduleFormat = "cjs"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// Models translated from docs/architecture/data-model.md (the source of truth).
+// Conventions:
+//  - org_id and domain FKs are modelled as relations (Prisma manages the FKs).
+//  - Audit attribution (created_by / updated_by / deleted_by, updated_by_org/_user) are plain
+//    uuid columns, NOT relations — they're metadata, set by the app from the request user.
+//  - Tenant scoping (filter by org_id) and soft-delete filtering (deleted_at IS NULL) are
+//    enforced in app code (a base service / Prisma $extends), not RLS.
+
+// ───────────────────────── enums ─────────────────────────
+enum Gender {
+  male
+  female
+  other
+}
+
+// Unified record status. `pending` = not yet active (org onboarding / staff invited);
+// `disabled` = turned off (incl. suspended). Workflow lifecycle enums (slot / appointment /
+// visit / schedule_exception) are separate — those aren't on/off states.
+enum Status {
+  active
+  disabled
+  pending
+}
+
+enum UserRole {
+  admin
+  doctor
+  front_desk
+  nurse
+}
+
+// Platform operators (our own company) — null for all customers/patients. Org roles answer
+// "what can you do at this org"; platform roles answer "what can you do to the platform".
+enum PlatformRole {
+  super_admin // onboard/manage orgs, bootstrap org admins, full platform control
+  support // read/assist; no destructive ops
+}
+
+enum AvailabilityMode {
+  slot
+  token
+}
+
+enum ExceptionType {
+  time_off
+  holiday
+  surgery
+  busy
+  extra_session
+}
+
+enum SlotStatus {
+  open
+  blocked
+}
+
+enum AppointmentType {
+  new
+  follow_up
+}
+
+enum AppointmentChannel {
+  walk_in
+  phone
+  online
+  patient_app
+}
+
+enum AppointmentStatus {
+  requested
+  confirmed
+  checked_in
+  fulfilled
+  cancelled
+  no_show
+  rescheduled
+}
+
+enum VisitStatus {
+  checked_in
+  in_consultation
+  completed
+  cancelled
+}
+
+enum ConsentType {
+  org_link
+}
+
+enum ConsentMethod {
+  otp
+}
+
+enum SequenceScope {
+  org
+  practice
+}
+
+enum SequenceName {
+  uhid
+  visit
+}
+
+// ──────────────── platform layer (global, no org_id) ────────────────
+model AppUser {
+  id            String        @id @default(uuid(7)) @db.Uuid
+  cognitoSub    String        @unique @map("cognito_sub") @db.VarChar(64)
+  firstName     String        @map("first_name") @db.VarChar(80)
+  lastName      String?       @map("last_name") @db.VarChar(80)
+  phone         String?       @db.VarChar(20) // NOT unique (families share)
+  email         String?       @db.VarChar(160)
+  dateOfBirth   DateTime?     @map("date_of_birth") @db.Date
+  gender        Gender?
+  status        Status        @default(active)
+  platformRole  PlatformRole? @map("platform_role") // set only for our own operators
+  updatedByOrg  String?       @map("updated_by_org") @db.Uuid // cross-org demographic attribution
+  updatedByUser String?       @map("updated_by_user") @db.Uuid
+  createdAt     DateTime      @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt     DateTime      @updatedAt @map("updated_at") @db.Timestamptz
+
+  patient Patient?
+  staff   Staff[]
+
+  @@index([phone])
+  @@map("app_user")
+}
+
+model Patient {
+  id          String   @id @default(uuid(7)) @db.Uuid
+  userId      String   @unique @map("user_id") @db.Uuid // 1:1 with app_user
+  abhaNumber  String?  @unique @map("abha_number") @db.VarChar(17)
+  abhaAddress String?  @unique @map("abha_address") @db.VarChar(64)
+  isVerified  Boolean  @default(false) @map("is_verified")
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz
+
+  user          AppUser               @relation(fields: [userId], references: [id])
+  registrations PatientRegistration[]
+  consents      Consent[]
+  appointments  Appointment[]
+  visits        Visit[]
+
+  @@index([abhaNumber])
+  @@map("patient")
+}
+
+// ──────────────── tenant layer (org-scoped) ────────────────
+model Organization {
+  id         String    @id @default(uuid(7)) @db.Uuid
+  name       String    @db.VarChar(160)
+  legalName  String?   @map("legal_name") @db.VarChar(200)
+  status     Status    @default(pending)
+  uhidFormat String    @default("UH{seq:08}") @map("uhid_format") @db.VarChar(64)
+  settings   Json      @default("{}")
+  createdAt  DateTime  @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt  DateTime  @updatedAt @map("updated_at") @db.Timestamptz
+  deletedAt  DateTime? @map("deleted_at") @db.Timestamptz
+
+  practices             Practice[]
+  staff                 Staff[]
+  staffPractices        StaffPractice[]
+  registrations         PatientRegistration[]
+  consents              Consent[]
+  availabilityTemplates AvailabilityTemplate[]
+  scheduleExceptions    ScheduleException[]
+  slots                 Slot[]
+  appointments          Appointment[]
+  visits                Visit[]
+  numberSequences       NumberSequence[]
+  auditLogs             AuditLog[]
+
+  @@map("organization")
+}
+
+model Practice {
+  id        String    @id @default(uuid(7)) @db.Uuid
+  orgId     String    @map("org_id") @db.Uuid
+  name      String    @db.VarChar(160)
+  code      String    @db.VarChar(32)
+  address   Json?
+  timezone  String    @default("Asia/Kolkata") @db.VarChar(40)
+  status    Status    @default(active)
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt DateTime  @updatedAt @map("updated_at") @db.Timestamptz
+  createdBy String?   @map("created_by") @db.Uuid
+  updatedBy String?   @map("updated_by") @db.Uuid
+  deletedAt DateTime? @map("deleted_at") @db.Timestamptz
+  deletedBy String?   @map("deleted_by") @db.Uuid
+
+  org                   Organization           @relation(fields: [orgId], references: [id])
+  staffPractices        StaffPractice[]
+  availabilityTemplates AvailabilityTemplate[]
+  scheduleExceptions    ScheduleException[]
+  slots                 Slot[]
+  appointments          Appointment[]
+  visits                Visit[]
+
+  @@unique([orgId, code])
+  @@map("practice")
+}
+
+// A user's membership at an org. roles[] drive authz. Clinician fields (specialty/reg_no/fee)
+// are set only when roles include 'doctor' — a "provider" is just a staff row with a clinical role.
+model Staff {
+  id                 String     @id @default(uuid(7)) @db.Uuid
+  orgId              String     @map("org_id") @db.Uuid
+  userId             String     @map("user_id") @db.Uuid
+  roles              UserRole[] @default([])
+  status             Status     @default(pending)
+  specialty          String?    @db.VarChar(120)
+  registrationNumber String?    @map("registration_number") @db.VarChar(64)
+  consultationFee    Decimal?   @map("consultation_fee") @db.Decimal(10, 2)
+  createdAt          DateTime   @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt          DateTime   @updatedAt @map("updated_at") @db.Timestamptz
+  createdBy          String?    @map("created_by") @db.Uuid
+  updatedBy          String?    @map("updated_by") @db.Uuid
+  deletedAt          DateTime?  @map("deleted_at") @db.Timestamptz
+  deletedBy          String?    @map("deleted_by") @db.Uuid
+
+  org                   Organization           @relation(fields: [orgId], references: [id])
+  user                  AppUser                @relation(fields: [userId], references: [id])
+  practices             StaffPractice[]
+  availabilityTemplates AvailabilityTemplate[]
+  scheduleExceptions    ScheduleException[]
+  slots                 Slot[]
+  appointments          Appointment[]
+  visits                Visit[]
+
+  @@unique([orgId, userId])
+  @@map("staff")
+}
+
+model StaffPractice {
+  orgId      String @map("org_id") @db.Uuid
+  staffId    String @map("staff_id") @db.Uuid
+  practiceId String @map("practice_id") @db.Uuid
+
+  org      Organization @relation(fields: [orgId], references: [id])
+  staff    Staff        @relation(fields: [staffId], references: [id])
+  practice Practice     @relation(fields: [practiceId], references: [id])
+
+  @@id([staffId, practiceId])
+  @@map("staff_practice")
+}
+
+// OTP/consent captured when a NEW org links to a (possibly pre-existing) patient.
+model Consent {
+  id         String        @id @default(uuid(7)) @db.Uuid
+  orgId      String        @map("org_id") @db.Uuid
+  patientId  String        @map("patient_id") @db.Uuid
+  type       ConsentType   @default(org_link)
+  method     ConsentMethod @default(otp)
+  reference  String?       @db.VarChar(80)
+  verifiedAt DateTime      @map("verified_at") @db.Timestamptz
+  expiresAt  DateTime?     @map("expires_at") @db.Timestamptz
+  createdAt  DateTime      @default(now()) @map("created_at") @db.Timestamptz
+  createdBy  String?       @map("created_by") @db.Uuid
+
+  org           Organization          @relation(fields: [orgId], references: [id])
+  patient       Patient               @relation(fields: [patientId], references: [id])
+  registrations PatientRegistration[]
+
+  @@map("consent")
+}
+
+// THE GATE: org ↔ global patient. Existence = visibility. Created lazily on first booking.
+model PatientRegistration {
+  id          String    @id @default(uuid(7)) @db.Uuid
+  orgId       String    @map("org_id") @db.Uuid
+  patientId   String    @map("patient_id") @db.Uuid
+  uhid        String    @db.VarChar(40)
+  status      Status    @default(active)
+  consentId   String?   @map("consent_id") @db.Uuid
+  firstSeenAt DateTime  @default(now()) @map("first_seen_at") @db.Timestamptz
+  lastSeenAt  DateTime  @default(now()) @map("last_seen_at") @db.Timestamptz
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt   DateTime  @updatedAt @map("updated_at") @db.Timestamptz
+  createdBy   String?   @map("created_by") @db.Uuid
+  updatedBy   String?   @map("updated_by") @db.Uuid
+  deletedAt   DateTime? @map("deleted_at") @db.Timestamptz
+  deletedBy   String?   @map("deleted_by") @db.Uuid
+
+  org     Organization @relation(fields: [orgId], references: [id])
+  patient Patient      @relation(fields: [patientId], references: [id])
+  consent Consent?     @relation(fields: [consentId], references: [id])
+
+  @@unique([orgId, patientId])
+  @@unique([orgId, uhid])
+  @@map("patient_registration")
+}
+
+model AvailabilityTemplate {
+  id               String           @id @default(uuid(7)) @db.Uuid
+  orgId            String           @map("org_id") @db.Uuid
+  practiceId       String           @map("practice_id") @db.Uuid
+  providerId       String           @map("provider_id") @db.Uuid // → staff (the clinician)
+  weekday          Int              @db.SmallInt // 0=Sun .. 6=Sat
+  startTime        DateTime         @map("start_time") @db.Time
+  endTime          DateTime         @map("end_time") @db.Time
+  mode             AvailabilityMode
+  slotDurationMins Int?             @map("slot_duration_mins")
+  apptCapacity     Int              @default(1) @map("appt_capacity")
+  walkinCapacity   Int              @default(0) @map("walkin_capacity")
+  validFrom        DateTime         @map("valid_from") @db.Date
+  validTo          DateTime?        @map("valid_to") @db.Date
+  createdAt        DateTime         @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt        DateTime         @updatedAt @map("updated_at") @db.Timestamptz
+  createdBy        String?          @map("created_by") @db.Uuid
+  updatedBy        String?          @map("updated_by") @db.Uuid
+  deletedAt        DateTime?        @map("deleted_at") @db.Timestamptz
+  deletedBy        String?          @map("deleted_by") @db.Uuid
+
+  org      Organization @relation(fields: [orgId], references: [id])
+  practice Practice     @relation(fields: [practiceId], references: [id])
+  provider Staff        @relation(fields: [providerId], references: [id])
+  slots    Slot[]
+
+  @@index([orgId, practiceId, providerId, weekday])
+  @@map("availability_template")
+}
+
+// Doctor blocks (time off / surgery / busy / holiday) and ad-hoc extra sessions.
+model ScheduleException {
+  id         String        @id @default(uuid(7)) @db.Uuid
+  orgId      String        @map("org_id") @db.Uuid
+  providerId String        @map("provider_id") @db.Uuid // → staff
+  practiceId String?       @map("practice_id") @db.Uuid // null = all practices
+  type       ExceptionType
+  startAt    DateTime      @map("start_at") @db.Timestamptz
+  endAt      DateTime      @map("end_at") @db.Timestamptz
+  allDay     Boolean       @default(false) @map("all_day")
+  reason     String?       @db.VarChar(200)
+  createdAt  DateTime      @default(now()) @map("created_at") @db.Timestamptz
+  createdBy  String?       @map("created_by") @db.Uuid
+
+  org      Organization @relation(fields: [orgId], references: [id])
+  provider Staff        @relation(fields: [providerId], references: [id])
+  practice Practice?    @relation(fields: [practiceId], references: [id])
+
+  @@index([orgId, providerId, startAt])
+  @@map("schedule_exception")
+}
+
+// Materialized bookable slots. Two capacity buckets (appt / walk-in); available = capacity -
+// booked is computed in app. Booking = atomic conditional UPDATE on the relevant bucket.
+model Slot {
+  id             String           @id @default(uuid(7)) @db.Uuid
+  orgId          String           @map("org_id") @db.Uuid
+  practiceId     String           @map("practice_id") @db.Uuid
+  providerId     String           @map("provider_id") @db.Uuid // → staff
+  templateId     String?          @map("template_id") @db.Uuid
+  mode           AvailabilityMode
+  startAt        DateTime         @map("start_at") @db.Timestamptz
+  endAt          DateTime         @map("end_at") @db.Timestamptz
+  apptCapacity   Int              @map("appt_capacity")
+  apptBooked     Int              @default(0) @map("appt_booked")
+  walkinCapacity Int              @default(0) @map("walkin_capacity")
+  walkinBooked   Int              @default(0) @map("walkin_booked")
+  status         SlotStatus       @default(open)
+  createdAt      DateTime         @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt      DateTime         @updatedAt @map("updated_at") @db.Timestamptz
+
+  org          Organization          @relation(fields: [orgId], references: [id])
+  practice     Practice              @relation(fields: [practiceId], references: [id])
+  provider     Staff                 @relation(fields: [providerId], references: [id])
+  template     AvailabilityTemplate? @relation(fields: [templateId], references: [id])
+  appointments Appointment[]
+
+  @@unique([providerId, startAt])
+  @@index([orgId, practiceId, providerId, startAt])
+  @@map("slot")
+}
+
+// Unified booking table: scheduled appointments AND walk-ins.
+model Appointment {
+  id          String             @id @default(uuid(7)) @db.Uuid
+  orgId       String             @map("org_id") @db.Uuid
+  practiceId  String             @map("practice_id") @db.Uuid
+  patientId   String             @map("patient_id") @db.Uuid
+  providerId  String             @map("provider_id") @db.Uuid // → staff (the clinician)
+  slotId      String             @map("slot_id") @db.Uuid
+  mode        AvailabilityMode
+  sessionDate DateTime           @map("session_date") @db.Date
+  tokenNumber Int?               @map("token_number")
+  apptType    AppointmentType    @default(new) @map("appt_type")
+  channel     AppointmentChannel // walk_in collapses booking + check-in
+  status      AppointmentStatus  @default(requested)
+  reason      String?
+  createdAt   DateTime           @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt   DateTime           @updatedAt @map("updated_at") @db.Timestamptz
+  createdBy   String?            @map("created_by") @db.Uuid
+  updatedBy   String?            @map("updated_by") @db.Uuid
+  deletedAt   DateTime?          @map("deleted_at") @db.Timestamptz
+  deletedBy   String?            @map("deleted_by") @db.Uuid
+
+  org      Organization @relation(fields: [orgId], references: [id])
+  practice Practice     @relation(fields: [practiceId], references: [id])
+  patient  Patient      @relation(fields: [patientId], references: [id])
+  provider Staff        @relation(fields: [providerId], references: [id])
+  slot     Slot         @relation(fields: [slotId], references: [id])
+  visits   Visit[]
+
+  @@index([orgId, practiceId, providerId, sessionDate])
+  @@index([orgId, patientId])
+  @@map("appointment")
+}
+
+model Visit {
+  id            String      @id @default(uuid(7)) @db.Uuid
+  orgId         String      @map("org_id") @db.Uuid
+  practiceId    String      @map("practice_id") @db.Uuid
+  patientId     String      @map("patient_id") @db.Uuid
+  providerId    String      @map("provider_id") @db.Uuid // → staff (the clinician)
+  appointmentId String?     @map("appointment_id") @db.Uuid // normally set (walk-ins too)
+  visitNumber   String      @map("visit_number") @db.VarChar(40)
+  tokenNumber   Int         @map("token_number")
+  status        VisitStatus @default(checked_in)
+  checkInAt     DateTime    @default(now()) @map("check_in_at") @db.Timestamptz
+  startedAt     DateTime?   @map("started_at") @db.Timestamptz
+  completedAt   DateTime?   @map("completed_at") @db.Timestamptz
+  vitals        Json?
+  notes         String?
+  createdAt     DateTime    @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt     DateTime    @updatedAt @map("updated_at") @db.Timestamptz
+  createdBy     String?     @map("created_by") @db.Uuid
+  updatedBy     String?     @map("updated_by") @db.Uuid
+  deletedAt     DateTime?   @map("deleted_at") @db.Timestamptz
+  deletedBy     String?     @map("deleted_by") @db.Uuid
+
+  org         Organization @relation(fields: [orgId], references: [id])
+  practice    Practice     @relation(fields: [practiceId], references: [id])
+  patient     Patient      @relation(fields: [patientId], references: [id])
+  provider    Staff        @relation(fields: [providerId], references: [id])
+  appointment Appointment? @relation(fields: [appointmentId], references: [id])
+
+  @@unique([practiceId, visitNumber])
+  @@index([orgId, practiceId, providerId, status, checkInAt])
+  @@map("visit")
+}
+
+// Atomic per-tenant counters (UHID, visit#). Token# comes from slot.*_booked, not here.
+model NumberSequence {
+  id           String        @id @default(uuid(7)) @db.Uuid
+  orgId        String        @map("org_id") @db.Uuid
+  scope        SequenceScope
+  scopeId      String        @map("scope_id") @db.Uuid
+  name         SequenceName
+  currentValue BigInt        @default(0) @map("current_value")
+
+  org Organization @relation(fields: [orgId], references: [id])
+
+  @@unique([orgId, scope, scopeId, name])
+  @@map("number_sequence")
+}
+
+// Append-only PHI/consent trail (full field-level history).
+model AuditLog {
+  id          BigInt   @id @default(autoincrement())
+  orgId       String?  @map("org_id") @db.Uuid // null for platform-level ops
+  actorUserId String?  @map("actor_user_id") @db.Uuid
+  action      String   @db.VarChar(80)
+  entityType  String   @map("entity_type") @db.VarChar(60)
+  entityId    String?  @map("entity_id") @db.Uuid
+  patientId   String?  @map("patient_id") @db.Uuid
+  metadata    Json     @default("{}")
+  ip          String?  @db.Inet
+  userAgent   String?  @map("user_agent")
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  org Organization? @relation(fields: [orgId], references: [id])
+
+  @@index([orgId, createdAt])
+  @@index([patientId])
+  @@map("audit_log")
+}
