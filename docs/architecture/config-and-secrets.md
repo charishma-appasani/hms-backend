@@ -16,54 +16,53 @@ Only the **source** of those env vars differs per environment:
 
 This is what keeps local and prod identical in code (12-factor).
 
+## Database: components, not a URL
+
+The app reads **discrete DB components** — `DATABASE_HOST`, `DATABASE_PORT`, `DATABASE_USER`,
+`DATABASE_PASSWORD`, `DATABASE_NAME` — and assembles the connection string itself via
+`buildDatabaseUrl` in [`env.schema.ts`](../../src/config/env.schema.ts) (with `?sslmode=require`).
+This lets deployed environments inject the credentials **straight from the RDS-managed secret**,
+so there is **no separate full-URL secret to hand-populate** and password rotation is tracked.
+
+Both the runtime adapter ([`prisma.service.ts`](../../src/prisma/prisma.service.ts)) and the
+Migrate CLI ([`prisma.config.ts`](../../prisma.config.ts)) build the URL from the same components.
+**Prisma 7 note:** the URL lives in `prisma.config.ts`, **not** the schema's `datasource` block
+(which only declares `provider`).
+
 ## Local
 
-1. `cp .env.example .env` and fill in `DATABASE_URL`.
-2. `prisma.config.ts` loads `.env` (via `dotenv`) and feeds `DATABASE_URL` to Migrate;
-   `@nestjs/config` loads it for the app; the runtime client connects via the
-   `@prisma/adapter-pg` adapter built from the same `DATABASE_URL`.
-   **Prisma 7 note:** the connection URL lives in `prisma.config.ts`, **not** in the schema's
-   `datasource` block (which only declares `provider`).
-3. Never commit `.env` (it's in `.gitignore`). Keep `.env.example` current.
+1. `cp .env.example .env` and fill in the `DATABASE_*` components.
+2. `@nestjs/config` validates them at boot (a missing/invalid value fails fast); `prisma.config.ts`
+   loads them via `dotenv` for Migrate. Never commit `.env`; keep `.env.example` current.
 
-Validation runs at boot — a missing/invalid `DATABASE_URL` fails fast with a readable error.
+## ECS (injected from the RDS-managed secret)
 
-## ECS + Secrets Manager
+CDK wires the task definition so credentials come from the RDS secret and the rest are plain env
+vars — **no SDK code in the app, no secret to populate**:
 
-Store the DB credential in Secrets Manager (one secret **per environment**, e.g.
-`hms/prod/db`) and inject it into the container as an env var via the task definition —
-**no SDK code in the app**:
-
-```jsonc
-// taskDefinition → containerDefinitions[].secrets
-"secrets": [
-  { "name": "DATABASE_URL", "valueFrom": "arn:aws:secretsmanager:<region>:<acct>:secret:hms/prod/db-XXXX" }
-]
+```ts
+// infrastructure/lib/infrastructure-stack.ts → taskDefinition.addContainer('hms', { ... })
+environment: { DATABASE_HOST: database.instanceEndpoint.hostname, DATABASE_PORT: '5432', DATABASE_NAME: 'hms' },
+secrets: {
+  DATABASE_USER:     ecs.Secret.fromSecretsManager(database.secret!, 'username'),
+  DATABASE_PASSWORD: ecs.Secret.fromSecretsManager(database.secret!, 'password'),
+}
 ```
 
-Requirements:
-- The **task execution role** needs `secretsmanager:GetSecretValue` (+ `kms:Decrypt` if the
-  secret uses a customer-managed KMS key).
-- If RDS manages the secret, it's JSON (`{username,password,host,port,dbname}`). Either
-  inject a single key (`valueFrom: "...:password::"`) and assemble the URL at startup, or
-  keep a separate full-connection-string secret (simplest for Prisma).
-- SSM Parameter Store `SecureString` works the same way and is cheaper for non-rotating
-  config; Secrets Manager is preferred when you want managed rotation.
+`fromSecretsManager` auto-grants the execution role `GetSecretValue` (+ KMS decrypt) on the secret.
 
-## Rotation gotcha
+## Rotation
 
-Env vars are set **once at container start**. If the DB password rotates, a *running* task
-keeps the old value until it restarts. Handle it by:
-- **Simple:** trigger a rolling ECS deployment on rotation.
-- **Prod hardening (later):** **RDS Proxy + IAM auth** — the app uses a short-lived IAM
-  token instead of a stored password, so there's nothing to rotate. More setup (Prisma must
-  receive the token as the connection password and refresh it); treat as a follow-up.
+The app always sources the password from the live RDS-managed secret, so rotation is mostly
+automatic — but env vars are read **once at task launch**, so a *running* task keeps the old value
+until it restarts. Trigger a rolling deployment (`update-service --force-new-deployment`) on
+rotation. **Prod hardening (later):** RDS Proxy + IAM auth removes the stored password entirely.
 
 ## Migrations
 
-Run `prisma migrate deploy` (not `migrate dev`) as a **separate one-off step** — a CI/CD
-stage or `aws ecs run-task` — with the same `DATABASE_URL` secret injected. Do **not** run
-migrations from the long-running app container on boot.
+Run `prisma migrate deploy` (not `migrate dev`) as a **separate one-off step** — a CI/CD stage or
+`aws ecs run-task` — with the same `DATABASE_*` components injected (same `environment` + `secrets`
+as the app). Do **not** run migrations from the long-running app container on boot.
 
 ## Adding a new config value
 

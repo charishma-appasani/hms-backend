@@ -3,12 +3,27 @@
 import 'dotenv/config';
 import { defineConfig } from 'prisma/config';
 
+// Assemble the connection string from the same DB components the app uses (see
+// src/config/env.schema.ts → buildDatabaseUrl). Inlined here because the Prisma CLI loads this
+// file standalone, outside the app's module graph. Keep the format in sync.
+const {
+  DATABASE_USER,
+  DATABASE_PASSWORD = '',
+  DATABASE_HOST,
+  DATABASE_PORT = '5432',
+  DATABASE_NAME = 'hms',
+} = process.env;
+
+const databaseUrl = `postgresql://${DATABASE_USER}:${encodeURIComponent(
+  DATABASE_PASSWORD,
+)}@${DATABASE_HOST}:${DATABASE_PORT}/${DATABASE_NAME}?sslmode=require`;
+
 export default defineConfig({
   schema: 'prisma/schema.prisma',
   migrations: {
     path: 'prisma/migrations',
   },
   datasource: {
-    url: process.env['DATABASE_URL'],
+    url: databaseUrl,
   },
 });

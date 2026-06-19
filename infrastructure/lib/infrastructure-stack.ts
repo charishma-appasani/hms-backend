@@ -12,7 +12,6 @@ import * as iam from 'aws-cdk-lib/aws-iam';
 import * as logs from 'aws-cdk-lib/aws-logs';
 import * as rds from 'aws-cdk-lib/aws-rds';
 import * as s3 from 'aws-cdk-lib/aws-s3';
-import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 import { Construct } from 'constructs';
 
 export interface InfrastructureStackProps extends cdk.StackProps {
@@ -134,21 +133,9 @@ export class InfrastructureStack extends cdk.Stack {
       parameters: { 'rds.force_ssl': '1' }, // enforce TLS to the DB
     });
 
-    // The app reads a single `DATABASE_URL` (see env.schema.ts), so we keep a dedicated
-    // full-connection-string secret rather than the RDS-managed JSON secret. CDK creates it
-    // (stable ARN for the task def to reference); populate the real value once after deploy:
-    //   aws secretsmanager put-secret-value --secret-id hms/<env>/database-url \
-    //     --secret-string "postgresql://postgres:<pw>@<DbEndpoint>:5432/hms?schema=public&sslmode=require"
-    // The <pw> lives in the RDS-managed secret (DbCredentialsSecretArn output).
-    const databaseUrlSecret = new secretsmanager.Secret(
-      this,
-      'DatabaseUrlSecret',
-      {
-        secretName: 'hms/database-url',
-        description: 'Full Prisma DATABASE_URL injected into the ECS task.',
-        removalPolicy: RemovalPolicy.RETAIN, // prod-grade across all envs
-      },
-    );
+    // The task definition injects the DB connection straight from the RDS-managed secret
+    // (username/password/host/port/dbname); the app assembles the URL (see env.schema.ts →
+    // buildDatabaseUrl). No separate secret to hand-populate, and it tracks password rotation.
 
     // ──────────── S3 + CloudFront (patient documents/reports) ────────────
     const documentsBucket = new s3.Bucket(this, 'DocumentsBucket', {
@@ -385,9 +372,19 @@ export class InfrastructureStack extends cdk.Stack {
         AWS_REGION: this.region,
         COGNITO_USER_POOL_ID: userPool.userPoolId,
         COGNITO_CLIENT_ID: userPoolClient.userPoolClientId,
+        // Non-secret DB connection details straight from the RDS instance.
+        DATABASE_HOST: database.instanceEndpoint.hostname,
+        DATABASE_PORT: '5432',
+        DATABASE_NAME: 'hms',
       },
+      // Only the credentials come from the RDS-managed secret; the app assembles the connection
+      // string (buildDatabaseUrl). fromSecretsManager auto-grants the execution role read.
       secrets: {
-        DATABASE_URL: ecs.Secret.fromSecretsManager(databaseUrlSecret),
+        DATABASE_USER: ecs.Secret.fromSecretsManager(database.secret!, 'username'),
+        DATABASE_PASSWORD: ecs.Secret.fromSecretsManager(
+          database.secret!,
+          'password',
+        ),
       },
       logging: ecs.LogDrivers.awsLogs({ streamPrefix: 'hms', logGroup }),
     });
@@ -443,14 +440,10 @@ export class InfrastructureStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'DatabaseEndpoint', {
       value: database.instanceEndpoint.hostname,
     });
-    // RDS-managed JSON secret ({username,password,host,...}) — read the password from here
-    // to assemble the DATABASE_URL value.
+    // RDS-managed JSON secret ({username,password,host,port,dbname}) — the task definition
+    // injects these fields directly into the container.
     new cdk.CfnOutput(this, 'DbCredentialsSecretArn', {
       value: database.secret?.secretArn ?? '',
-    });
-    // The full-connection-string secret the task def injects as DATABASE_URL — populate after deploy.
-    new cdk.CfnOutput(this, 'DatabaseUrlSecretArn', {
-      value: databaseUrlSecret.secretArn,
     });
     new cdk.CfnOutput(this, 'UserPoolId', { value: userPool.userPoolId });
     new cdk.CfnOutput(this, 'UserPoolClientId', {
