@@ -1,0 +1,63 @@
+{
+  "family": "hms-backend",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": ["FARGATE"],
+  "cpu": "256",
+  "memory": "512",
+  "runtimePlatform": {
+    "cpuArchitecture": "ARM64",
+    "operatingSystemFamily": "LINUX"
+  },
+  "executionRoleArn": "arn:aws:iam::201063584490:role/Hms-Backend-FargateTaskExecutionRoleA379CC17-iHswX3Rbnkwj",
+  "taskRoleArn": "arn:aws:iam::201063584490:role/Hms-Backend-FargateTaskRole44F4EBFF-h4RRCIUCqZn8",
+  "containerDefinitions": [
+    {
+      "name": "hms",
+      "image": "201063584490.dkr.ecr.ap-south-2.amazonaws.com/hms:latest",
+      "essential": true,
+      "portMappings": [
+        {
+          "containerPort": 3000,
+          "protocol": "tcp"
+        }
+      ],
+      "environment": [
+        {
+          "name": "NODE_ENV",
+          "value": "production"
+        },
+        {
+          "name": "PORT",
+          "value": "3000"
+        },
+        {
+          "name": "AWS_REGION",
+          "value": "ap-south-2"
+        },
+        {
+          "name": "COGNITO_USER_POOL_ID",
+          "value": "ap-south-2_DvCIKMJ09"
+        },
+        {
+          "name": "COGNITO_CLIENT_ID",
+          "value": "67fh6ubdf222uookeifa6aj6r7"
+        }
+      ],
+      "secrets": [
+        {
+          "name": "DATABASE_URL",
+          "valueFrom": "arn:aws:secretsmanager:ap-south-2:201063584490:secret:hms/dev/database-url-7YqYvM"
+        }
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/hms-backend",
+          "awslogs-region": "ap-south-2",
+          "awslogs-stream-prefix": "hms",
+          "awslogs-create-group": "true"
+        }
+      }
+    }
+  ]
+}

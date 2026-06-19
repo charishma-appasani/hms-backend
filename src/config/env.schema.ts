@@ -1,8 +1,8 @@
 import { z } from 'zod';
 
 /**
- * Single source of truth for environment configuration. Values come from `.env` locally
- * and from AWS Secrets Manager (injected by ECS) in deployed environments — the app does
+ * Single source of truth for environment configuration. Values come from `.env` locally and
+ * from the ECS task definition (env + Secrets Manager) in deployed environments — the app does
  * not care which. Validation runs at boot so a missing/invalid var fails fast.
  */
 export const envSchema = z.object({
@@ -12,7 +12,7 @@ export const envSchema = z.object({
   PORT: z.coerce.number().int().positive().default(3000),
   DATABASE_URL: z.url(),
   // Cognito (single shared user pool for all users; see data-model.md)
-  AWS_REGION: z.string().default('ap-south-1'),
+  AWS_REGION: z.string().default('ap-south-2'),
   COGNITO_USER_POOL_ID: z.string(),
   COGNITO_CLIENT_ID: z.string(),
 });
