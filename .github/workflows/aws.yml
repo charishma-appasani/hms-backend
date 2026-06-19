@@ -1,16 +1,16 @@
 name: Deploy to Amazon ECS
 
+# One pipeline per environment branch; each branch deploys to its own AWS account via the OIDC
+# role in that account (vars.AWS_DEPLOY_ROLE_ARN, scoped to its GitHub environment).
 on:
   push:
     branches: ['main']
 
 env:
   AWS_REGION: ap-south-2 # Hyderabad (India data residency)
-  ECR_REPOSITORY: hms # fixed repo name created by the CDK stack
-  ECS_SERVICE: hms-backend-service # the ECS service you created manually (not owned by CDK)
-  ECS_CLUSTER: Hms-Backend-HMSClusterC0F4F44B-gXwrS0z7O3es # CDK output: ClusterName
-  ECS_TASK_DEFINITION: task-definition.json # path to the task definition in this repo
-  CONTAINER_NAME: hms # must match containerDefinitions[].name in task-definition.json
+  ECR_REPOSITORY: hms # repo name created by the CDK stack
+  ECS_SERVICE: hms-backend-service # CDK FargateService (serviceName) — stable across accounts
+  ECS_CLUSTER: hms-backend # CDK cluster (clusterName) — stable across accounts
 
 permissions:
   contents: read
@@ -20,7 +20,7 @@ jobs:
   deploy:
     name: Deploy
     runs-on: ubuntu-latest
-    environment: production
+    environment: production # must match the OIDC role's trust `sub` for this branch's account
 
     steps:
       - name: Checkout
@@ -42,31 +42,29 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
+      # Build once; push :<sha> (immutable, for traceability/rollback) and :latest (what the
+      # CDK task definition references).
       - name: Build, tag, and push image to Amazon ECR
-        id: build-image
         env:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
           IMAGE_TAG: ${{ github.sha }}
         run: |
           docker buildx build --platform linux/arm64 \
             -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG \
+            -t $ECR_REGISTRY/$ECR_REPOSITORY:latest \
             --provenance=false \
             --sbom=false \
             --push .
-          echo "image=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" >> $GITHUB_OUTPUT
 
-      - name: Fill in the new image ID in the Amazon ECS task definition
-        id: task-def
-        uses: aws-actions/amazon-ecs-render-task-definition@v1
-        with:
-          task-definition: ${{ env.ECS_TASK_DEFINITION }}
-          container-name: ${{ env.CONTAINER_NAME }}
-          image: ${{ steps.build-image.outputs.image }}
-
-      - name: Deploy Amazon ECS task definition
-        uses: aws-actions/amazon-ecs-deploy-task-definition@v2
-        with:
-          task-definition: ${{ steps.task-def.outputs.task-definition }}
-          service: ${{ env.ECS_SERVICE }}
-          cluster: ${{ env.ECS_CLUSTER }}
-          wait-for-service-stability: true
+      # CDK owns the task definition; just force a new deployment so ECS re-pulls :latest.
+      - name: Roll the ECS service onto the new image
+        run: |
+          aws ecs update-service \
+            --cluster "$ECS_CLUSTER" \
+            --service "$ECS_SERVICE" \
+            --force-new-deployment \
+            --region "$AWS_REGION"
+          aws ecs wait services-stable \
+            --cluster "$ECS_CLUSTER" \
+            --services "$ECS_SERVICE" \
+            --region "$AWS_REGION"

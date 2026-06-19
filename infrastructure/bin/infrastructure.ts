@@ -10,6 +10,7 @@ const certificateArn = app.node.tryGetContext('certificateArn') as
   | string
   | undefined;
 
+// Account/region come from the deploying pipeline's credentials (one account per env).
 new InfrastructureStack(app, 'Hms-Backend', {
   certificateArn,
   env: {

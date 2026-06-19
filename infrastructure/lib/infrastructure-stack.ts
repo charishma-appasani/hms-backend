@@ -9,6 +9,7 @@ import * as ecr from 'aws-cdk-lib/aws-ecr';
 import * as ecs from 'aws-cdk-lib/aws-ecs';
 import * as elbv2 from 'aws-cdk-lib/aws-elasticloadbalancingv2';
 import * as iam from 'aws-cdk-lib/aws-iam';
+import * as logs from 'aws-cdk-lib/aws-logs';
 import * as rds from 'aws-cdk-lib/aws-rds';
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
@@ -20,15 +21,11 @@ export interface InfrastructureStackProps extends cdk.StackProps {
 }
 
 /**
- * Durable HMS infrastructure. CDK owns the foundation + ALB target group + IAM roles and
- * exposes their identifiers as outputs. The ECS **task definition and service are managed
- * outside CDK** (a task-def file registered + service created/updated manually) — that file
- * sets the container image, DATABASE_URL, Cognito env, secrets, and attaches to the
- * target-group ARN below.
- *
- * NOTE: RDS + Cognito use `RemovalPolicy.RETAIN` so patient data / user identities survive a
- * stack delete or resource replace. Before real production data, also set RDS
- * `deletionProtection: true` (and consider the same RETAIN for the S3 documents bucket).
+ * Durable HMS infrastructure (one account/branch/pipeline per environment).
+ * CDK owns everything end-to-end: the foundation (VPC/ALB/RDS/Cognito/ECR), the IAM roles, and
+ * the ECS **task definition + service** (single source of truth — no task-definition.json). The
+ * CI pipeline only builds/pushes the image to ECR `:latest` and rolls the service via
+ * `aws ecs update-service --force-new-deployment`.
  */
 export class InfrastructureStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props: InfrastructureStackProps) {
@@ -64,6 +61,7 @@ export class InfrastructureStack extends cdk.Stack {
 
     const cluster = new ecs.Cluster(this, 'HMSCluster', {
       vpc,
+      clusterName: 'hms-backend', // stable across accounts so the workflow needs no per-branch edit
       enableFargateCapacityProviders: true,
     });
 
@@ -119,13 +117,14 @@ export class InfrastructureStack extends cdk.Stack {
         ec2.InstanceClass.T4G,
         ec2.InstanceSize.MICRO,
       ),
+      multiAz: false, // TODO - switch to true when needed
       allocatedStorage: 20,
       maxAllocatedStorage: 50,
       securityGroups: [dbSecurityGroup],
-      // RETAIN: CloudFormation orphans (never deletes) the DB on stack delete / resource replace,
-      // so patient data survives. Flip deletionProtection to true before real production data.
-      removalPolicy: RemovalPolicy.DESTROY,
-      deletionProtection: false,
+      // Production-grade settings applied to ALL environments: RETAIN orphans the DB on stack
+      // delete (patient data survives); deletionProtection blocks accidental deletion.
+      removalPolicy: RemovalPolicy.RETAIN,
+      deletionProtection: true,
       databaseName: 'hms',
       credentials: rds.Credentials.fromGeneratedSecret('postgres'),
       storageEncrypted: true, // PHI at rest
@@ -138,14 +137,18 @@ export class InfrastructureStack extends cdk.Stack {
     // The app reads a single `DATABASE_URL` (see env.schema.ts), so we keep a dedicated
     // full-connection-string secret rather than the RDS-managed JSON secret. CDK creates it
     // (stable ARN for the task def to reference); populate the real value once after deploy:
-    //   aws secretsmanager put-secret-value --secret-id hms/dev/database-url \
+    //   aws secretsmanager put-secret-value --secret-id hms/<env>/database-url \
     //     --secret-string "postgresql://postgres:<pw>@<DbEndpoint>:5432/hms?schema=public&sslmode=require"
     // The <pw> lives in the RDS-managed secret (DbCredentialsSecretArn output).
-    const databaseUrlSecret = new secretsmanager.Secret(this, 'DatabaseUrlSecret', {
-      secretName: 'hms/dev/database-url',
-      description: 'Full Prisma DATABASE_URL injected into the ECS task.',
-      removalPolicy: RemovalPolicy.RETAIN, // survives stack delete alongside the DB
-    });
+    const databaseUrlSecret = new secretsmanager.Secret(
+      this,
+      'DatabaseUrlSecret',
+      {
+        secretName: 'hms/database-url',
+        description: 'Full Prisma DATABASE_URL injected into the ECS task.',
+        removalPolicy: RemovalPolicy.RETAIN, // prod-grade across all envs
+      },
+    );
 
     // ──────────── S3 + CloudFront (patient documents/reports) ────────────
     const documentsBucket = new s3.Bucket(this, 'DocumentsBucket', {
@@ -250,9 +253,8 @@ export class InfrastructureStack extends cdk.Stack {
         'service-role/AmazonECSTaskExecutionRolePolicy',
       ),
     );
-    // The task def injects DATABASE_URL from this secret — allow the execution role to read it
-    // (grantRead covers GetSecretValue + KMS decrypt on the secret's key).
-    databaseUrlSecret.grantRead(taskExecutionRole);
+    // (The task def's container injects DATABASE_URL via ecs.Secret.fromSecretsManager, which
+    // grants this execution role read on the secret automatically — no explicit grant needed.)
 
     // ──────────────── GitHub Actions OIDC deploy role ────────────────
     // Lets the GitHub workflow assume a role via OIDC instead of long-lived access keys.
@@ -288,32 +290,12 @@ export class InfrastructureStack extends cdk.Stack {
 
     // ECR: push/pull the hms image (grantPullPush also adds ecr:GetAuthorizationToken on *).
     repository.grantPullPush(githubDeployRole);
-    // ECS: register a new task-definition revision and roll the service.
-    githubDeployRole.addToPolicy(
-      new iam.PolicyStatement({
-        // These actions don't support resource-level scoping.
-        actions: [
-          'ecs:RegisterTaskDefinition',
-          'ecs:DeregisterTaskDefinition',
-          'ecs:DescribeTaskDefinition',
-        ],
-        resources: ['*'],
-      }),
-    );
+    // ECS: roll the service onto the new image (CDK owns the task def, so CI only needs this —
+    // no RegisterTaskDefinition / PassRole).
     githubDeployRole.addToPolicy(
       new iam.PolicyStatement({
         actions: ['ecs:UpdateService', 'ecs:DescribeServices'],
-        resources: ['*'], // scope to the service ARN once the manual service is named
-      }),
-    );
-    // ECS must be allowed to pass the task + execution roles when launching tasks.
-    githubDeployRole.addToPolicy(
-      new iam.PolicyStatement({
-        actions: ['iam:PassRole'],
-        resources: [taskRole.roleArn, taskExecutionRole.roleArn],
-        conditions: {
-          StringEquals: { 'iam:PassedToService': 'ecs-tasks.amazonaws.com' },
-        },
+        resources: ['*'],
       }),
     );
 
@@ -326,7 +308,7 @@ export class InfrastructureStack extends cdk.Stack {
     });
     // NOTE: attach an AWS WAFv2 WebACL to `alb` here for SQLi/XSS/rate-limit protection (PHI).
 
-    // Empty target group; the manual ECS service registers its tasks (awsvpc → IP targets) here.
+    // Target group for the Fargate service below (awsvpc → IP targets).
     const targetGroup = new elbv2.ApplicationTargetGroup(
       this,
       'EcsTargetGroup',
@@ -372,11 +354,76 @@ export class InfrastructureStack extends cdk.Stack {
       });
     }
 
+    // ──────────────── Fargate task definition + service ────────────────
+    // CDK is the single source of truth for the task definition (no task-definition.json). The CI
+    // pipeline only builds/pushes the image to ECR `:latest` and rolls the service with
+    // `aws ecs update-service --force-new-deployment`, so it re-pulls `:latest` without changing
+    // the task def or desiredCount — no drift.
+    const logGroup = new logs.LogGroup(this, 'HmsLogGroup', {
+      logGroupName: '/ecs/hms-backend',
+      retention: logs.RetentionDays.ONE_MONTH,
+      removalPolicy: RemovalPolicy.DESTROY,
+    });
+
+    const taskDefinition = new ecs.FargateTaskDefinition(this, 'TaskDef', {
+      memoryLimitMiB: 512,
+      cpu: 256,
+      taskRole,
+      executionRole: taskExecutionRole,
+      runtimePlatform: {
+        cpuArchitecture: ecs.CpuArchitecture.ARM64,
+        operatingSystemFamily: ecs.OperatingSystemFamily.LINUX,
+      },
+    });
+    taskDefinition.addContainer('hms', {
+      image: ecs.ContainerImage.fromEcrRepository(repository, 'latest'),
+      essential: true,
+      portMappings: [{ containerPort: 3000 }],
+      environment: {
+        NODE_ENV: 'production',
+        PORT: '3000',
+        AWS_REGION: this.region,
+        COGNITO_USER_POOL_ID: userPool.userPoolId,
+        COGNITO_CLIENT_ID: userPoolClient.userPoolClientId,
+      },
+      secrets: {
+        DATABASE_URL: ecs.Secret.fromSecretsManager(databaseUrlSecret),
+      },
+      logging: ecs.LogDrivers.awsLogs({ streamPrefix: 'hms', logGroup }),
+    });
+
+    const service = new ecs.FargateService(this, 'Service', {
+      cluster,
+      serviceName: 'hms-backend-service', // matches ECS_SERVICE in aws.yml
+      taskDefinition,
+      // First-ever deploy only: ECR `:latest` doesn't exist yet, so the task can't start and the
+      // circuit breaker would roll back. Bootstrap with `-c desiredCount=0`, push an image via the
+      // pipeline, then redeploy at 1. Steady state is 1.
+      desiredCount: Number(this.node.tryGetContext('desiredCount') ?? 0),
+      assignPublicIp: true, // public subnets, no NAT — tasks need a public IP to reach ECR/AWS
+      securityGroups: [fargateSecurityGroup],
+      capacityProviderStrategies: [
+        { capacityProvider: 'FARGATE_SPOT', weight: 1 },
+      ],
+      vpcSubnets: { subnetType: ec2.SubnetType.PUBLIC },
+      circuitBreaker: { rollback: true },
+      availabilityZoneRebalancing: ecs.AvailabilityZoneRebalancing.ENABLED,
+      healthCheckGracePeriod: Duration.seconds(60),
+      minHealthyPercent: 50,
+      maxHealthyPercent: 200,
+    });
+
+    // Listener → target group → this service (container/port match task-definition.json).
+    targetGroup.addTarget(
+      service.loadBalancerTarget({ containerName: 'hms', containerPort: 3000 }),
+    );
+
     // ─────────────────────── Outputs (consumed by the manual task def + service) ───────────────────────
     new cdk.CfnOutput(this, 'AlbUrl', {
       value: `${certificateArn ? 'https' : 'http'}://${alb.loadBalancerDnsName}`,
     });
     new cdk.CfnOutput(this, 'ClusterName', { value: cluster.clusterName });
+    new cdk.CfnOutput(this, 'ServiceName', { value: service.serviceName });
     new cdk.CfnOutput(this, 'TargetGroupArn', {
       value: targetGroup.targetGroupArn,
     });
