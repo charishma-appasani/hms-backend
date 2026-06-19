@@ -18,7 +18,12 @@ WORKDIR /app
 # Copy package files
 COPY package*.json ./
 
-# Install dependencies
+# Prisma schema + config must exist before `npm ci`, because the `postinstall` script runs
+# `prisma generate` (which reads prisma.config.ts → prisma/schema.prisma).
+COPY prisma ./prisma
+COPY prisma.config.ts ./
+
+# Install dependencies (triggers postinstall → prisma generate → generated/prisma)
 RUN npm ci
 
 # Copy source code
@@ -48,6 +53,9 @@ RUN apk add --no-cache ca-certificates postgresql-client wget \
 COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/package*.json ./
+# The Prisma client is generated outside node_modules (generator output: ../generated/prisma)
+# and is imported at runtime as generated/prisma/client — it must ship in the runtime image.
+COPY --from=builder /app/generated ./generated
 
 # Create a non-root user
 RUN addgroup -S appgroup && adduser -S appuser -G appgroup
