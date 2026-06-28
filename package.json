@@ -21,6 +21,9 @@
     "test:e2e": "jest --config ./test/jest-e2e.json"
   },
   "dependencies": {
+    "@aws-sdk/client-cognito-identity-provider": "^3.1075.0",
+    "@aws-sdk/client-sesv2": "^3.1075.0",
+    "@aws-sdk/client-sns": "^3.1075.0",
     "@nestjs/common": "^11.0.1",
     "@nestjs/config": "^4.0.4",
     "@nestjs/core": "^11.0.1",
@@ -39,9 +42,9 @@
     "@nestjs/schematics": "^11.0.0",
     "@nestjs/testing": "^11.0.1",
     "@types/jest": "^30.0.0",
-    "dotenv": "^17.4.2",
     "@types/node": "^24.0.0",
     "@types/supertest": "^7.0.0",
+    "dotenv": "^17.4.2",
     "eslint": "^9.18.0",
     "eslint-config-prettier": "^10.0.1",
     "eslint-plugin-prettier": "^5.2.2",

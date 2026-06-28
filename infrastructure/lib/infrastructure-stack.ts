@@ -213,6 +213,13 @@ export class InfrastructureStack extends cdk.Stack {
         resources: ['*'], // scope to a verified identity ARN once it exists
       }),
     );
+    // Patient SMS notifications via SNS (publish to phone numbers has no resource ARN).
+    taskRole.addToPolicy(
+      new iam.PolicyStatement({
+        actions: ['sns:Publish'],
+        resources: ['*'],
+      }),
+    );
     // Staff invite / patient provisioning against the pool.
     taskRole.addToPolicy(
       new iam.PolicyStatement({
@@ -372,6 +379,9 @@ export class InfrastructureStack extends cdk.Stack {
         AWS_REGION: this.region,
         COGNITO_USER_POOL_ID: userPool.userPoolId,
         COGNITO_CLIENT_ID: userPoolClient.userPoolClientId,
+        // Patient notifications. Flip to 'true' once a verified SES sender + India DLT are ready;
+        // also set NOTIFICATIONS_EMAIL_FROM, SMS_SENDER_ID, SMS_DLT_ENTITY_ID. Until then → stubs.
+        NOTIFICATIONS_ENABLED: 'false',
         // Non-secret DB connection details straight from the RDS instance.
         DATABASE_HOST: database.instanceEndpoint.hostname,
         DATABASE_PORT: '5432',

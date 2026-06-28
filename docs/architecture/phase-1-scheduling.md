@@ -1,9 +1,23 @@
 # Phase 1 — Patient Scheduling, Visits & OP / Appointment Management (Backend)
 
-> Status: **Design / proposed.** No code written yet. This is the backend **architecture
-> overview**. The authoritative data model (tables/fields/flows) is
-> [`data-model.md`](./data-model.md); terms are in [`glossary.md`](./glossary.md); the
-> frontend design is in `hms-frontend/docs/architecture/phase-1-scheduling.md`.
+> Status: **In build.** Foundation landed — Prisma schema + migrations, the auth layer
+> (Cognito JWT → `app_user`, `GET /auth/me`), the org-context + RBAC guard chain
+> (see [`auth-and-authz.md`](./auth-and-authz.md)), and the tenant-scoped data-access layer
+> (`ScopedPrismaService`; see [`data-model.md`](./data-model.md) §7). Feature modules
+> built: **organizations** (`/platform/organizations`, platform CRUD), **practices**
+> (`/practices`) + **addresses** (`/addresses`, tenant-scoped CRUD), and **staff**
+> (`/staff` — adds a member to an org, provisioning their Cognito identity + `app_user` in the
+> same call). Scheduling has started: **availability templates** (`/availability-templates`,
+> a doctor's **bounded** weekly hours — `startDate` + 1–8 weeks — that **eagerly generate** their
+> slots) and **slot availability** (`/availability`, a read over generated slots) and
+> **appointment booking** (`/appointments` — atomic no-oversell, walk-ins, cancel) and
+> **visits/check-in** (`/visits` — appt→visit, OP queue, clinical lifecycle), and appointment
+> **reschedule**, **schedule exceptions** (doctor blocks), and **template drop/replace** (cancel /
+> migrate + notify) are built. Remaining: `extra_session` (additive blocks). This is the backend
+> **architecture overview**. The authoritative
+> data model (tables/fields/flows) is [`data-model.md`](./data-model.md); terms are in
+> [`glossary.md`](./glossary.md); the frontend design is in
+> `hms-frontend/docs/architecture/phase-1-scheduling.md`.
 
 ## 1. Product context
 
@@ -141,21 +155,69 @@ POST   /registrations                      register patient at org → issues UH
 GET    /registrations?query=               search within current org (org-scoped)
 
 # Staff & availability (a clinician is a staff member with role 'doctor')
-POST   /staff                              invite/add staff (roles, clinician fields)
-POST   /staff/:id/availability             template
-POST   /staff/:id/exceptions
-GET    /scheduling/availability?staffId=&date=   free slots / next token
+POST   /staff                              invite/add staff (roles, clinician fields)  [built]
+POST   /availability-templates             bounded weekly hours; eager slot gen  [built]
+POST   /availability-templates/:id/replace  supersede schedule; MIGRATE bookings  [built]
+DELETE /availability-templates/:id          DROP schedule; CANCEL bookings + notify  [built]
+       # drop = cancel future bookings (+notify), delete empty slots, block slots that still carry
+       # (now-cancelled) bookings (FK: can't delete a slot an appt references), soft-delete template.
+       # replace (same provider+practice) = generate new schedule, block old slots, migrate old
+       # future bookings to nearest new open slot (cancel if none) + notify, then drop old template.
+       # Both reuse RelocationService (shared with schedule blocks).
+POST   /schedule-exceptions                doctor block → blocks slots + auto-reschedules  [built]
+DELETE /schedule-exceptions/:id             remove block → reopens its slots  [built]
+       # Subtractive blocks (time_off/holiday/surgery/busy) flip overlapping OPEN slots → blocked
+       # (reversible; capacity preserved). Displaced FUTURE bookings are AUTO-RESCHEDULED to the
+       # nearest open slot (same provider+practice), cancelled if none; already checked-in patients
+       # are left (needsAttention). Response = { blockedSlotCount, rescheduled[], cancelled[],
+       # needsAttention[] }. Delete reopens slots unless another active block still covers them.
+       # Exceptions are order-independent: a block created BEFORE a template makes the template's
+       # overlapping slots generate as `blocked` (reopened if the block is later removed).
+       # Relocated/cancelled patients are NOTIFIED (NotificationService, email+SMS).
+       # extra_session (additive) NOT yet built.
+
+# Notifications (src/notifications) — pluggable NotificationService, fans out to every channel a
+#   recipient supports. Real SES (email) + SNS (SMS) channels are built; NOTIFICATIONS_ENABLED
+#   selects them vs logging stubs (default false → local/CI never send). Prod still needs a
+#   verified SES sender (NOTIFICATIONS_EMAIL_FROM) and, for India SMS, DLT (SMS_SENDER_ID +
+#   SMS_DLT_ENTITY_ID + per-template ids). Task role has ses:SendEmail + sns:Publish. Phone is
+#   primary for patients (email optional), so SMS is the main reach.
+GET    /availability?practiceId=&providerId=&date=   slots + computed availability  [built]
+       # Templates are BOUNDED: startDate + weeks (1–8); the recurring weekday is startDate's
+       # weekday. Creating a template EAGERLY materializes all its slots for the range in one
+       # transaction (no cron, no lazy gen). Times are practice-local wall-clock, resolved to UTC
+       # with the practice tz. No PATCH — changing a live schedule is the replace+migrate flow
+       # (planned, post-booking): replace ⇒ auto-move appts to nearest open slot (any day) else
+       # cancel; drop ⇒ cancel all future appts; both notify the patient (email + SMS).
 
 # Appointments
-POST   /appointments                       book (slot or token)
-PATCH  /appointments/:id/reschedule
-PATCH  /appointments/:id/cancel
+POST   /appointments                       book a scheduled appt (appt bucket)  [built]
+POST   /appointments/walk-in               register a walk-in (walk-in bucket, checked-in)  [built]
+       # Soft cap: accepted into any OPEN slot even past walkin_capacity (front desk can't turn
+       # people away). Response carries walkinOverbooked + walkinOverLimit (booked − capacity).
+GET    /appointments?providerId=&patientId=&date=&status=   list / OPD queue  [built]
+PATCH  /appointments/:id/cancel            cancel + release the seat  [built]
+PATCH  /appointments/:id/reschedule        move to another slot (incl. walk-ins)  [built]
+       # reschedule = history-preserving: old appt → 'rescheduled', NEW 'confirmed' appt on the
+       # target slot, linked via rescheduledFromId (GET returns the appt + optional rescheduledFrom).
+       # Atomic (new seat secured before old released). Works for booked AND walk-ins (releases the
+       # right bucket); a still-waiting visit is cancelled, mid/after-consultation → 409. Notifies.
+       # No-oversell (appt bucket only): a single atomic conditional UPDATE on the slot bucket
+       #   (UPDATE slot SET appt_booked = appt_booked+1 WHERE status='open' AND appt_booked<appt_capacity
+       #    RETURNING ...) — raw SQL because Prisma can't compare column<column; org_id in the WHERE.
+       # Walk-in bucket drops the capacity guard (WHERE status='open' only) → soft cap; overflow
+       # reported per slot and rolled up per day in the availability view.
+       # token# = appt_booked + walkin_booked (one shared queue). Reserve + appt insert share a tx.
 
 # Visits / OP queue
-POST   /visits/check-in                    from appointment OR walk-in
-GET    /visits/queue?practiceId=&providerId=&date=   live OP queue board
-PATCH  /visits/:id/status                  in_consultation / completed
-PATCH  /visits/:id/vitals
+POST   /visits/check-in                    appt → visit (per-practice visit#)  [built]
+GET    /visits/queue?practiceId=&providerId=&date=   live OP queue (token order)  [built]
+GET    /visits/:id                          [built]
+PATCH  /visits/:id/status                  in_consultation / completed / cancelled  [built]
+PATCH  /visits/:id/vitals                  vitals (JSON) + notes  [built]
+       # checked_in → in_consultation → completed (completing fulfils the appointment).
+       # visit# = gapless per-practice counter (number_sequence, INSERT…ON CONFLICT +1).
+       # One visit per appointment. queue date filters on check-in time (practice-local day).
 ```
 
 All tenant routes run behind: `JwtAuthGuard (sets orgId/practiceId on request) → RbacGuard`.
@@ -174,7 +236,17 @@ All tenant routes run behind: `JwtAuthGuard (sets orgId/practiceId on request) �
   `slot` / `numberSequence` / `auditLog`.
 - **Audit log (full history):** an `audit_log` table is the append-only *who/what/when* trail
   (every change, field-level) for PHI/consent — distinct from the inline `*By` columns, which
-  only hold the latest writer. Keep both.
+  only hold the latest writer. Keep both. **Write path = `AuditService`** (`src/audit/`,
+  @Global, REQUEST-scoped): `record({action, entityType, entityId?, patientId?, metadata})`
+  auto-attributes actor/org/IP/user-agent from the request and inserts via the unscoped client.
+  Best-effort (a failed audit insert is logged, never throws/rolls back the action); call it
+  AFTER the action commits. Wired at patient create/update/signup/link, appointment book/walk-in/
+  cancel/reschedule, staff create. `diffFields(before, after)` builds the `{field:{from,to}}`
+  metadata for updates. **org-assume:** a platform super_admin acting on a tenant they don't belong
+  to is logged as `org.assume` (mutating requests only) by `OrgContextGuard` via the shared
+  `writeAuditLog(prisma, …)` helper (the guard is a singleton, can't inject the request-scoped
+  service); every action taken while assumed is also auto-tagged `metadata.assumed=true`. (Read/
+  export access logging still to wire.)
 - **Time:** store UTC; each Practice carries a timezone (default `Asia/Kolkata`, no DST).
 - **Optional (nice-to-have, not required for Phase 1):** `nestjs-pino` logging,
   `@nestjs/swagger` API docs.

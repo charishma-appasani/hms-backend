@@ -28,13 +28,12 @@ enum Gender {
   other
 }
 
-// Unified record status. `pending` = not yet active (org onboarding / staff invited);
-// `disabled` = turned off (incl. suspended). Workflow lifecycle enums (slot / appointment /
-// visit / schedule_exception) are separate — those aren't on/off states.
+// Unified record on/off status. A record is `active` from creation until an authorized person
+// turns it off (`disabled`, incl. suspended) — there is no pending/onboarding state. Workflow
+// lifecycle enums (slot / appointment / visit / schedule_exception) are separate.
 enum Status {
   active
   disabled
-  pending
 }
 
 enum UserRole {
@@ -122,8 +121,8 @@ model AppUser {
   cognitoSub    String        @unique @map("cognito_sub") @db.VarChar(64)
   firstName     String        @map("first_name") @db.VarChar(80)
   lastName      String?       @map("last_name") @db.VarChar(80)
-  phone         String?       @db.VarChar(20) // NOT unique (families share)
-  email         String?       @db.VarChar(160)
+  phone         String?       @unique @db.VarChar(20) // unique per person (no shared phones)
+  email         String?       @unique @db.VarChar(160) // unique per person
   dateOfBirth   DateTime?     @map("date_of_birth") @db.Date
   gender        Gender?
   status        Status        @default(active)
@@ -136,7 +135,6 @@ model AppUser {
   patient Patient?
   staff   Staff[]
 
-  @@index([phone])
   @@map("app_user")
 }
 
@@ -159,17 +157,38 @@ model Patient {
   @@map("patient")
 }
 
+// Short-lived phone OTP challenge for patient self-signup (global; no org). Code is stored
+// hashed; verified against expiry + an attempt cap. Pruned after use/expiry.
+model OtpChallenge {
+  id         String    @id @default(uuid(7)) @db.Uuid
+  phone      String    @db.VarChar(20)
+  codeHash   String    @map("code_hash") @db.VarChar(128)
+  purpose    String    @db.VarChar(40) // e.g. 'patient_signup'
+  attempts   Int       @default(0)
+  ip         String?   @db.VarChar(45) // request IP (for per-IP rate limiting; IPv6-sized)
+  expiresAt  DateTime  @map("expires_at") @db.Timestamptz
+  consumedAt DateTime? @map("consumed_at") @db.Timestamptz
+  createdAt  DateTime  @default(now()) @map("created_at") @db.Timestamptz
+
+  @@index([phone, purpose])
+  @@index([ip, createdAt])
+  @@map("otp_challenge")
+}
+
 // ──────────────── tenant layer (org-scoped) ────────────────
 model Organization {
   id         String    @id @default(uuid(7)) @db.Uuid
   name       String    @db.VarChar(160)
   legalName  String?   @map("legal_name") @db.VarChar(200)
-  status     Status    @default(pending)
+  status     Status    @default(active)
   uhidFormat String    @default("UH{seq:08}") @map("uhid_format") @db.VarChar(64)
   settings   Json      @default("{}")
   createdAt  DateTime  @default(now()) @map("created_at") @db.Timestamptz
   updatedAt  DateTime  @updatedAt @map("updated_at") @db.Timestamptz
+  createdBy  String?   @map("created_by") @db.Uuid // platform operator who onboarded the org
+  updatedBy  String?   @map("updated_by") @db.Uuid
   deletedAt  DateTime? @map("deleted_at") @db.Timestamptz
+  deletedBy  String?   @map("deleted_by") @db.Uuid
 
   practices             Practice[]
   staff                 Staff[]
@@ -192,7 +211,7 @@ model Practice {
   orgId     String    @map("org_id") @db.Uuid
   name      String    @db.VarChar(160)
   code      String    @db.VarChar(32)
-  address   Json?
+  addressId String?   @unique @map("address_id") @db.Uuid // → address (1:1; nested-managed)
   timezone  String    @default("Asia/Kolkata") @db.VarChar(40)
   status    Status    @default(active)
   createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz
@@ -203,6 +222,7 @@ model Practice {
   deletedBy String?   @map("deleted_by") @db.Uuid
 
   org                   Organization           @relation(fields: [orgId], references: [id])
+  address               Address?               @relation(fields: [addressId], references: [id])
   staffPractices        StaffPractice[]
   availabilityTemplates AvailabilityTemplate[]
   scheduleExceptions    ScheduleException[]
@@ -214,6 +234,28 @@ model Practice {
   @@map("practice")
 }
 
+// Entity-agnostic postal address (India). A LEAN value table — no org_id, no audit/soft-delete,
+// not tenant-scoped. Owners (practice today; organization/patient later) hold `address_id` and
+// reach it via their own 1:1 relation; scope comes from the owner (a patient's address is global,
+// a practice's is reached via the scoped practice). Managed nested within its owner, not via its
+// own endpoint. Back-refs are added here per owner type as they gain addresses.
+model Address {
+  id         String   @id @default(uuid(7)) @db.Uuid
+  line1      String   @db.VarChar(200)
+  line2      String?  @db.VarChar(200)
+  landmark   String?  @db.VarChar(120)
+  city       String   @db.VarChar(120)
+  state      String   @db.VarChar(120)
+  postalCode String   @map("postal_code") @db.VarChar(12) // PIN code (6 digits in India)
+  country    String   @default("IN") @db.VarChar(2) // ISO 3166-1 alpha-2
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt  DateTime @updatedAt @map("updated_at") @db.Timestamptz
+
+  practice Practice? // 1:1 back-ref; add patient/organization as they gain addresses
+
+  @@map("address")
+}
+
 // A user's membership at an org. roles[] drive authz. Clinician fields (specialty/reg_no/fee)
 // are set only when roles include 'doctor' — a "provider" is just a staff row with a clinical role.
 model Staff {
@@ -221,7 +263,7 @@ model Staff {
   orgId              String     @map("org_id") @db.Uuid
   userId             String     @map("user_id") @db.Uuid
   roles              UserRole[] @default([])
-  status             Status     @default(pending)
+  status             Status     @default(active)
   specialty          String?    @db.VarChar(120)
   registrationNumber String?    @map("registration_number") @db.VarChar(64)
   consultationFee    Decimal?   @map("consultation_fee") @db.Decimal(10, 2)
@@ -346,7 +388,11 @@ model ScheduleException {
   allDay     Boolean       @default(false) @map("all_day")
   reason     String?       @db.VarChar(200)
   createdAt  DateTime      @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt  DateTime      @updatedAt @map("updated_at") @db.Timestamptz
   createdBy  String?       @map("created_by") @db.Uuid
+  updatedBy  String?       @map("updated_by") @db.Uuid
+  deletedAt  DateTime?     @map("deleted_at") @db.Timestamptz
+  deletedBy  String?       @map("deleted_by") @db.Uuid
 
   org      Organization @relation(fields: [orgId], references: [id])
   provider Staff        @relation(fields: [providerId], references: [id])
@@ -401,6 +447,9 @@ model Appointment {
   channel     AppointmentChannel // walk_in collapses booking + check-in
   status      AppointmentStatus  @default(requested)
   reason      String?
+  // When this appointment was created by rescheduling another, points back to the original
+  // (which is left in status 'rescheduled') — so the UI can show both old and new details.
+  rescheduledFromId String?      @map("rescheduled_from_id") @db.Uuid
   createdAt   DateTime           @default(now()) @map("created_at") @db.Timestamptz
   updatedAt   DateTime           @updatedAt @map("updated_at") @db.Timestamptz
   createdBy   String?            @map("created_by") @db.Uuid
@@ -408,12 +457,14 @@ model Appointment {
   deletedAt   DateTime?          @map("deleted_at") @db.Timestamptz
   deletedBy   String?            @map("deleted_by") @db.Uuid
 
-  org      Organization @relation(fields: [orgId], references: [id])
-  practice Practice     @relation(fields: [practiceId], references: [id])
-  patient  Patient      @relation(fields: [patientId], references: [id])
-  provider Staff        @relation(fields: [providerId], references: [id])
-  slot     Slot         @relation(fields: [slotId], references: [id])
-  visits   Visit[]
+  org             Organization  @relation(fields: [orgId], references: [id])
+  practice        Practice      @relation(fields: [practiceId], references: [id])
+  patient         Patient       @relation(fields: [patientId], references: [id])
+  provider        Staff         @relation(fields: [providerId], references: [id])
+  slot            Slot          @relation(fields: [slotId], references: [id])
+  rescheduledFrom Appointment?  @relation("AppointmentReschedule", fields: [rescheduledFromId], references: [id])
+  rescheduledTo   Appointment[] @relation("AppointmentReschedule")
+  visits          Visit[]
 
   @@index([orgId, practiceId, providerId, sessionDate])
   @@index([orgId, patientId])

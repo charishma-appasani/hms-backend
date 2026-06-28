@@ -18,18 +18,30 @@ export const envSchema = z.object({
   DATABASE_USER: z.string(),
   DATABASE_PASSWORD: z.string(),
   DATABASE_NAME: z.string().default('hms'),
+  // TLS mode for the Postgres connection. `require` for RDS (rds.force_ssl=1); `disable` for a
+  // local Postgres without SSL. Keep in sync with prisma.config.ts (the CLI assembles its own URL).
+  DATABASE_SSLMODE: z.enum(['require', 'disable', 'prefer']).default('require'),
   // Cognito (single shared user pool for all users; see data-model.md)
   AWS_REGION: z.string().default('ap-south-2'),
   COGNITO_USER_POOL_ID: z.string(),
   COGNITO_CLIENT_ID: z.string(),
+  // Notifications. Disabled by default → logging stubs (so local/CI never send). Set
+  // NOTIFICATIONS_ENABLED=true in deployed envs to use real SES (email) + SNS (SMS).
+  NOTIFICATIONS_ENABLED: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((v) => v === 'true'),
+  NOTIFICATIONS_EMAIL_FROM: z.email().optional(), // a verified SES sender identity
+  SMS_SENDER_ID: z.string().optional(), // DLT-registered sender ID (India)
+  SMS_DLT_ENTITY_ID: z.string().optional(), // DLT principal-entity ID (India)
 });
 
 export type Env = z.infer<typeof envSchema>;
 
 /**
- * Assemble the Prisma/Postgres connection string from discrete components. `sslmode=require`
- * because RDS enforces TLS (`rds.force_ssl=1`). The password is URL-encoded so special
- * characters don't corrupt the URL.
+ * Assemble the Prisma/Postgres connection string from discrete components. `sslmode` defaults to
+ * `require` (RDS enforces TLS via `rds.force_ssl=1`); set `disable` for a local Postgres without
+ * SSL. The password is URL-encoded so special characters don't corrupt the URL.
  */
 export function buildDatabaseUrl(p: {
   user: string;
@@ -37,8 +49,9 @@ export function buildDatabaseUrl(p: {
   host: string;
   port: number;
   name: string;
+  sslmode?: string;
 }): string {
-  return `postgresql://${p.user}:${encodeURIComponent(p.password)}@${p.host}:${p.port}/${p.name}?sslmode=require`;
+  return `postgresql://${p.user}:${encodeURIComponent(p.password)}@${p.host}:${p.port}/${p.name}?sslmode=${p.sslmode ?? 'require'}`;
 }
 
 /** Passed to `ConfigModule.forRoot({ validate })`. Throws with a readable message on failure. */

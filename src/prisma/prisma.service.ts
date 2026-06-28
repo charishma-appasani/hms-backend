@@ -23,6 +23,7 @@ export class PrismaService
           host: config.getOrThrow('DATABASE_HOST'),
           port: config.getOrThrow('DATABASE_PORT'),
           name: config.getOrThrow('DATABASE_NAME'),
+          sslmode: config.getOrThrow('DATABASE_SSLMODE'),
         }),
       }),
     });

@@ -38,8 +38,8 @@
 | Visibility | Org reaches a user only via `staff` or `patient_registration` (no global directory) |
 | Demographics | Fully shared, last-write-wins; edits unrestricted for now, attributed (org+user) + audited. OTP gate deferred. |
 | First org-link | Requires patient OTP/consent (`consent` row) |
-| Scheduling | Materialized `slot` rows with **two capacity buckets** (`appt_*` / `walkin_*`); `*_booked` stored, `*_available` computed (`capacity − booked`). One model serves slot mode (appt_capacity=1) and token mode (per-session capacities). Atomic conditional UPDATE per bucket prevents oversell. |
-| Walk-ins | Same `appointment` table as bookings (`channel='walk_in'`, created `checked_in`); consume the walk-in bucket; one shared queue |
+| Scheduling | Materialized `slot` rows with **two capacity buckets** (`appt_*` / `walkin_*`); `*_booked` stored, `*_available` computed (`capacity − booked`). One model serves slot mode (appt_capacity=1) and token mode (per-session capacities). Atomic conditional UPDATE per bucket: appt bucket prevents oversell; walk-in bucket is soft-capped (overflow reported). |
+| Walk-ins | Same `appointment` table as bookings (`channel='walk_in'`, created `checked_in`); consume the walk-in bucket; one shared queue. **Never turned away** — accepted past `walkin_capacity`; overflow surfaced per booking/slot/day |
 | Blocks | `schedule_exception` (time_off/surgery/busy/holiday/extra_session) flips slots to `blocked`; conflicts with booked appts warn + require explicit action |
 | IDs | UUID v7 PKs; UHID/visit# via `number_sequence`; token# = running total `appt_booked + walkin_booked` |
 | Timestamps | `timestamptz`, store UTC; practice carries timezone |
@@ -49,7 +49,7 @@
 
 ```sql
 CREATE TYPE gender    AS ENUM ('male','female','other');
-CREATE TYPE status    AS ENUM ('active','disabled','pending');  -- unified: pending=onboarding/invited, disabled=suspended
+CREATE TYPE status    AS ENUM ('active','disabled');  -- unified on/off: active from creation until an authorized person disables (incl. suspended). No onboarding/pending state.
 CREATE TYPE user_role     AS ENUM ('admin','doctor','front_desk','nurse');     -- org-scoped (staff.roles)
 CREATE TYPE platform_role AS ENUM ('super_admin','support');                   -- our operators only (app_user)
 CREATE TYPE availability_mode   AS ENUM ('slot','token');
@@ -79,8 +79,8 @@ CREATE TABLE app_user (
   cognito_sub     varchar(64) NOT NULL UNIQUE,      -- Cognito pool sub; maps login → this row
   first_name      varchar(80) NOT NULL,
   last_name       varchar(80),
-  phone           varchar(20),                      -- NOT unique (families share)
-  email           varchar(160),
+  phone           varchar(20) UNIQUE,               -- UNIQUE per person (no shared phones)
+  email           varchar(160) UNIQUE,              -- UNIQUE per person
   date_of_birth   date,
   gender          gender,                           -- optional (no 'unknown' fallback)
   status          status NOT NULL DEFAULT 'active',
@@ -109,6 +109,14 @@ CREATE INDEX patient_abha_idx ON patient (abha_number);
 > `staff` membership (colleagues) or a `patient_registration` (its patients) — never a bare
 > list. Login maps `cognito_sub → app_user`; discovery for *new* patient links is an
 > OTP-gated lookup (§8).
+>
+> **Each person has a UNIQUE phone or email** (their Cognito login) — no shared phones. **Two
+> patient-create paths (built, `/patients`):** (1) **staff create** — registers a NEW patient at
+> the org (app_user + patient + registration/UHID), provisioning a Cognito login by phone/email
+> (duplicate phone/email → 409). (2) **self-signup** — public OTP flow (`POST /patients/signup/start` → SMS code →
+> `/verify` sets a password, creates app_user + patient, NO org registration yet). A short-lived
+> hashed `otp_challenge` row backs the OTP. Linking a *pre-existing* patient to a new org
+> (OTP/consent, §8) is still deferred — staff-create handles brand-new patients.
 
 ## 5. Tenant layer (every table has `org_id`)
 
@@ -116,18 +124,21 @@ CREATE INDEX patient_abha_idx ON patient (abha_number);
 > (shown in the DDL; DB/ORM-managed) plus `created_by`, `updated_by`, `deleted_at`,
 > `deleted_by` (omitted from the DDL for brevity). The `*_by` columns → `app_user`, nullable
 > (null = system or patient self-service), and are stamped by the service from the request
-> user (§7). `deleted_at` null = live (soft delete).
-> Exceptions: `slot`, `number_sequence`, `audit_log` carry none of the `*_by`/`deleted_*`
-> set (system-generated / counter / append-only); the global `app_user` uses
-> `updated_by_org` + `updated_by_user` for cross-org attribution. Full change history (every
-> edit, field-level) lives in `audit_log` — the inline `*_by` columns only hold the latest writer.
+> user (§7). `deleted_at` null = live (soft delete). `organization` (the tenant root — it has
+> no `org_id`) carries the same standard record set.
+> Exceptions: `slot`, `number_sequence`, `staff_practice`, `audit_log` carry none of the
+> `*_by`/`deleted_*` set (system-generated / counter / junction / append-only); `consent` is an
+> append-only ledger — `created_by` only, no `updated_*`/`deleted_*` (a captured consent is a
+> legal record, never edited or soft-deleted). The global `app_user` uses `updated_by_org` +
+> `updated_by_user` for cross-org attribution. Full change history (every edit, field-level)
+> lives in `audit_log` — the inline `*_by` columns only hold the latest writer.
 
 ```sql
 CREATE TABLE organization (
   id          uuid PRIMARY KEY,
   name        varchar(160) NOT NULL,
   legal_name  varchar(200),
-  status      status NOT NULL DEFAULT 'pending',
+  status      status NOT NULL DEFAULT 'active',
   uhid_format varchar(64) NOT NULL DEFAULT 'UH{seq:08}',   -- per-org UHID template
   settings    jsonb NOT NULL DEFAULT '{}',
   created_at  timestamptz NOT NULL DEFAULT now(),
@@ -139,13 +150,32 @@ CREATE TABLE practice (
   org_id     uuid NOT NULL REFERENCES organization(id),
   name       varchar(160) NOT NULL,
   code       varchar(32)  NOT NULL,
-  address    jsonb,
+  address_id uuid UNIQUE REFERENCES address(id),     -- 1:1; nested-managed (see `address` below)
   timezone   varchar(40) NOT NULL DEFAULT 'Asia/Kolkata',
   status     status NOT NULL DEFAULT 'active',
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now(),
   UNIQUE (org_id, code)
 );
+
+-- Entity-agnostic postal address (India). A LEAN value table: NO org_id, no audit/soft-delete,
+-- not tenant-scoped. Owners hold a 1:1 `address_id` (practice.address_id today; organization /
+-- patient later) and reach it via their own relation — scope comes from the owner (a patient's
+-- address is global; a practice's is reached via the scoped practice). Managed NESTED within its
+-- owner (created/updated with the owner, in one transaction) — there is no standalone address API.
+CREATE TABLE address (
+  id          uuid PRIMARY KEY,
+  line1       varchar(200) NOT NULL,
+  line2       varchar(200),
+  landmark    varchar(120),
+  city        varchar(120) NOT NULL,
+  state       varchar(120) NOT NULL,
+  postal_code varchar(12)  NOT NULL,                 -- PIN code (6 digits in India)
+  country     char(2) NOT NULL DEFAULT 'IN',         -- ISO 3166-1 alpha-2
+  created_at  timestamptz NOT NULL DEFAULT now(),
+  updated_at  timestamptz NOT NULL DEFAULT now()
+);
+-- owners reference it 1:1, e.g. practice.address_id uuid UNIQUE REFERENCES address(id)
 
 -- A user's membership at an org. roles[] drive what they can see/do. Clinician columns
 -- (specialty/reg_no/fee) are set only when roles include 'doctor' — a "provider" is just a
@@ -155,7 +185,7 @@ CREATE TABLE staff (
   org_id              uuid NOT NULL REFERENCES organization(id),
   user_id             uuid NOT NULL REFERENCES app_user(id),
   roles               user_role[] NOT NULL DEFAULT '{}',   -- admin | doctor | nurse | front_desk
-  status              status NOT NULL DEFAULT 'pending',
+  status              status NOT NULL DEFAULT 'active',
   specialty           varchar(120),                        -- clinician only
   registration_number varchar(64),                         -- clinician only (medical council reg)
   consultation_fee    numeric(10,2),                       -- clinician only
@@ -230,7 +260,8 @@ CREATE TABLE schedule_exception (
   end_at      timestamptz NOT NULL,
   all_day     boolean NOT NULL DEFAULT false,
   reason      varchar(200),
-  created_at  timestamptz NOT NULL DEFAULT now()
+  created_at  timestamptz NOT NULL DEFAULT now(),
+  updated_at  timestamptz NOT NULL DEFAULT now()   -- + standard *_by / deleted_* (editable, soft-deletable)
 );
 
 -- Materialized bookable slots. Two capacity buckets (appt / walk-in) serve both slot mode
@@ -252,9 +283,10 @@ CREATE TABLE slot (
   status        slot_status NOT NULL DEFAULT 'open',   -- 'blocked' → effective availability 0, reversible
   created_at    timestamptz NOT NULL DEFAULT now(),
   updated_at    timestamptz NOT NULL DEFAULT now(),
-  UNIQUE (provider_id, start_at),
-  CHECK (appt_booked   BETWEEN 0 AND appt_capacity),
-  CHECK (walkin_booked BETWEEN 0 AND walkin_capacity)
+  UNIQUE (provider_id, start_at)
+  -- appt bucket is hard-capped (no oversell); walk-in bucket is soft-capped — walkin_booked may
+  -- exceed walkin_capacity (overflow is reported, not blocked). Bounds are enforced in app, not
+  -- as DB CHECKs.
 );
 CREATE INDEX slot_lookup_idx ON slot (org_id, practice_id, provider_id, start_at);
 
@@ -347,13 +379,18 @@ No RLS. Isolation is enforced in app code:
 
 1. An **auth guard** validates the JWT and puts `orgId` (and the selected `practiceId`)
    on the request.
-2. **Every tenant query filters by `orgId` (and `deletedAt IS NULL`).** Keep this from
-   drifting by centralizing it — a base service / repository helper, or a Prisma `$extends`
-   that injects `where: { orgId, deletedAt: null }` — rather than per call site. Tenant
-   *record* tables carry a nullable `deleted_at` (soft delete); derived/counter/audit tables
-   (`slot`, `number_sequence`, `audit_log`) do not. The same write path stamps
-   `created_by` / `updated_by` (and `deleted_by` on soft-delete) from the request user;
-   `created_at` / `updated_at` are DB/ORM-managed.
+2. **Every tenant query filters by `orgId` (and `deletedAt IS NULL`).** This is centralized in
+   a request-scoped Prisma `$extends` client (`src/prisma/scoped-prisma.service.ts` →
+   `scoped-client.ts`) bound to the request's `orgId` + actor by `OrgContextGuard`. Feature
+   services inject `ScopedPrismaService` and write plain queries; the extension injects
+   `where: { orgId, deletedAt: null }` on reads/updates and stamps `created_by` / `updated_by`
+   on writes — so a forgotten filter can't leak across orgs. Which columns apply per table is
+   declared in `src/prisma/tenant-models.ts` (the schema's single source of audit-column truth
+   for the helper). Guard rails: `findUnique` on a tenant model throws (its `where` can't take an
+   org filter — use `findFirst`); hard `delete` on a soft-delete model throws (soft-delete via
+   `update({ data: { deletedAt, deletedBy } })`). `created_at` / `updated_at` are DB/ORM-managed.
+   Global/platform tables (`app_user`, `patient`, `organization`, `audit_log`) bypass the helper
+   — inject the unscoped `PrismaService` and stamp explicitly.
 3. **Global `app_user` / `patient` is reached only through a link.** Staff are reached via the
    `staff` membership for the current org; patients via `patient_registration`. There is no
    "list all users/patients" path — the membership/registration is the gate.
@@ -367,9 +404,10 @@ No RLS. Isolation is enforced in app code:
 the first org admin, and the one legitimate **global** user search. They do **not** bypass
 tenant scoping — to act inside a tenant they explicitly *assume* that org (audited:
 `audit_log` records the assume + every action taken while assumed), then flow through the
-same scoped queries as org staff. Onboarding flow: super_admin creates org (`pending`) →
-creates first `staff` admin (`pending`) → Cognito invite → first login activates → org admin
-takes over → org flips `active`.
+same scoped queries as org staff. Onboarding flow: super_admin creates org (`active`) →
+creates first `staff` admin (`active`) → Cognito invite (FORCE_CHANGE_PASSWORD gates real
+access until they set a password) → org admin takes over. Records are `active` from creation;
+there is no pending/activation state — an authorized person `disable`s them to turn them off.
 
 ## 8. Patient lookup & linking (OTP-gated)
 
@@ -410,17 +448,24 @@ the stored counters; `*_available` is computed (`capacity − booked`). Booking 
 `channel` (`walk_in` → walk-in bucket, else appointment bucket). **Hard split for now** — a
 "shared overflow / reserved minimum" policy can layer on later.
 
+**Appt bucket is hard-capped; walk-in bucket is soft-capped.** Pre-booked appointments never
+oversell (`appt_booked < appt_capacity`). Walk-ins, however, can't be turned away at the desk:
+a walk-in is accepted into any *open* slot regardless of `walkin_capacity`, so `walkin_booked`
+may exceed it. The **overflow** (`walkin_booked − walkin_capacity`, floored at 0) is reported
+rather than blocked — per walk-in on booking (`walkinOverbooked`/`walkinOverLimit`), per slot,
+and rolled up per day in the availability view.
+
 **Booking (the concurrency-safe core).** One atomic conditional UPDATE on the relevant
-bucket grabs a seat — no locks, no oversell:
+bucket grabs a seat — no locks; the appt bucket additionally guards against oversell:
 
 ```sql
--- pre-booked appointment
+-- pre-booked appointment (hard cap)
 UPDATE slot SET appt_booked = appt_booked + 1
 WHERE id=$1 AND status='open' AND appt_booked < appt_capacity
 RETURNING appt_booked + walkin_booked AS token_number;
--- walk-in
+-- walk-in (soft cap: accepted whenever the slot is open; overflow reported, not blocked)
 UPDATE slot SET walkin_booked = walkin_booked + 1
-WHERE id=$1 AND status='open' AND walkin_booked < walkin_capacity
+WHERE id=$1 AND status='open'
 RETURNING appt_booked + walkin_booked AS token_number;
 ```
 0 rows → that bucket is full or the slot is blocked → reject (HTTP 409). `token_number` is

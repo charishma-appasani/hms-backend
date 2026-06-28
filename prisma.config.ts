@@ -16,7 +16,9 @@ const {
 
 const databaseUrl = `postgresql://${DATABASE_USER}:${encodeURIComponent(
   DATABASE_PASSWORD,
-)}@${DATABASE_HOST}:${DATABASE_PORT}/${DATABASE_NAME}?sslmode=require`;
+)}@${DATABASE_HOST}:${DATABASE_PORT}/${DATABASE_NAME}?sslmode=${
+  process.env.DATABASE_SSLMODE ?? 'require'
+}`;
 
 export default defineConfig({
   schema: 'prisma/schema.prisma',
@@ -25,5 +27,8 @@ export default defineConfig({
   },
   datasource: {
     url: databaseUrl,
+    // Only needed by local `migrate diff --from-migrations` / `migrate dev` (replays migrations
+    // into a throwaway DB). Unset in normal app/deploy runs.
+    shadowDatabaseUrl: process.env.DATABASE_SHADOW_URL,
   },
 });
