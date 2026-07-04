@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import { ScopedPrismaService } from '../../prisma/scoped-prisma.service';
 import { AuditService } from '../../audit/audit.service';
+import { NotificationService } from '../../notifications/notification.service';
 import { formatDateOnly, utcToZonedDateOnly } from '../../common/datetime';
 import { parseDateOnly } from '../../common/datetime';
 import type {
@@ -21,13 +22,15 @@ import type {
 } from './dto/book-appointment.dto';
 
 /** Which slot capacity bucket a channel draws on. */
-type Bucket = 'appt' | 'walkin';
+export type Bucket = 'appt' | 'walkin';
 
 const PATIENT_INCLUDE = {
   patient: {
     select: {
       id: true,
-      user: { select: { firstName: true, lastName: true, phone: true } },
+      user: {
+        select: { firstName: true, lastName: true, phone: true, email: true },
+      },
     },
   },
 } as const;
@@ -57,6 +60,7 @@ export class AppointmentsService {
   constructor(
     private readonly scoped: ScopedPrismaService,
     private readonly audit: AuditService,
+    private readonly notifications: NotificationService,
   ) {}
 
   book(dto: BookAppointmentDto) {
@@ -159,6 +163,11 @@ export class AppointmentsService {
         patientId,
         metadata: { slotId, tokenNumber: appointment.tokenNumber, channel: opts.channel },
       });
+      // Confirmation to the patient (best-effort; channel errors are swallowed by the service).
+      await this.notifications.notify(recipientOf(appointment), {
+        kind: 'appointment_booked',
+        appointment: { sessionDate: response.sessionDate, tokenNumber: response.tokenNumber },
+      });
       return response;
     }
     // Soft-capped bucket: tell the front desk how far past the walk-in limit this slot now is.
@@ -239,6 +248,10 @@ export class AppointmentsService {
       entityId: appointment.id,
       patientId: appointment.patientId,
       metadata: { slotId: appointment.slotId, previousStatus },
+    });
+    await this.notifications.notify(recipientOf(appointment), {
+      kind: 'appointment_cancelled',
+      appointment: { sessionDate: toResponse(appointment).sessionDate, tokenNumber: appointment.tokenNumber },
     });
     return toResponse(appointment);
   }
@@ -359,12 +372,12 @@ export class AppointmentsService {
   }
 }
 
-interface SeatCounters {
+export interface SeatCounters {
   apptBooked: number;
   walkinBooked: number;
 }
 
-type RawTx = Pick<Prisma.TransactionClient, '$queryRaw' | '$executeRawUnsafe'>;
+export type RawTx = Pick<Prisma.TransactionClient, '$queryRaw' | '$executeRawUnsafe'>;
 
 /**
  * Atomically reserve a seat in a slot's bucket (a single conditional UPDATE — column<column isn't
@@ -376,7 +389,7 @@ type RawTx = Pick<Prisma.TransactionClient, '$queryRaw' | '$executeRawUnsafe'>;
  * walk-in is accepted into any open slot regardless of `walkin_capacity` (front desk can't turn
  * people away), and the overflow is reported separately (booked − capacity).
  */
-async function reserveSeat(
+export async function reserveSeat(
   tx: RawTx,
   slotId: string,
   orgId: string,
@@ -398,7 +411,7 @@ async function reserveSeat(
 }
 
 /** Release a previously-reserved seat (guarded so the counter can't go negative). */
-async function releaseSeat(
+export async function releaseSeat(
   tx: RawTx,
   slotId: string,
   orgId: string,
@@ -417,9 +430,23 @@ async function releaseSeat(
 type AppointmentWithPatient = Appointment & {
   patient: {
     id: string;
-    user: { firstName: string; lastName: string | null; phone: string | null };
+    user: {
+      firstName: string;
+      lastName: string | null;
+      phone: string | null;
+      email: string | null;
+    };
   };
 };
+
+/** Build the notification recipient from an appointment's patient demographics. */
+function recipientOf(a: AppointmentWithPatient) {
+  return {
+    name: a.patient.user.firstName,
+    email: a.patient.user.email,
+    phone: a.patient.user.phone,
+  };
+}
 
 /** API shape: session date as YYYY-MM-DD; patient demographics flattened from app_user. */
 function toResponse(a: AppointmentWithPatient) {

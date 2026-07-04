@@ -57,8 +57,18 @@ function buildMessage(
   event: NotificationEvent,
 ): NotificationMessage {
   const hi = `Dear ${recipient.name},`;
-  const because = event.reason ? ` (${event.reason})` : '';
+  const because = 'reason' in event && event.reason ? ` (${event.reason})` : '';
   switch (event.kind) {
+    case 'appointment_booked':
+      return {
+        subject: 'Your appointment is confirmed',
+        body:
+          `${hi} your appointment` +
+          `${event.providerName ? ` with ${event.providerName}` : ''}` +
+          `${event.orgName ? ` at ${event.orgName}` : ''} on ` +
+          `${event.appointment.sessionDate} (token ${event.appointment.tokenNumber ?? '-'}) ` +
+          `is confirmed. Please arrive a little early.`,
+      };
     case 'appointment_rescheduled':
       return {
         subject: 'Your appointment has been rescheduled',

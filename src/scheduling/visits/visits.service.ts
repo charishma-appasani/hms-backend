@@ -13,7 +13,11 @@ import type {
   VisitStatus,
 } from '../../../generated/prisma/client';
 import type {
+  CreatePrescriptionDto,
+  CreateTestOrderDto,
   QueueQueryDto,
+  UpdateClinicalDto,
+  UpdateTestOrderDto,
   UpdateVisitStatusDto,
   VisitVitalsDto,
 } from './dto/visit.dto';
@@ -137,10 +141,27 @@ export class VisitsService {
   async get(id: string) {
     const visit = await this.scoped.db.visit.findFirst({
       where: { id },
-      include: PATIENT_INCLUDE,
+      include: {
+        ...PATIENT_INCLUDE,
+        practice: { select: { name: true, org: { select: { name: true } } } },
+        provider: {
+          select: { specialty: true, user: { select: { firstName: true, lastName: true } } },
+        },
+        prescriptions: { orderBy: { createdAt: 'asc' } },
+        testOrders: { orderBy: { createdAt: 'asc' } },
+      },
     });
     if (!visit) throw new NotFoundException('Visit not found');
-    return toResponse(visit);
+    const providerName = `${visit.provider.user.firstName} ${visit.provider.user.lastName ?? ''}`.trim();
+    return {
+      ...toResponse(visit),
+      orgName: visit.practice.org.name,
+      practiceName: visit.practice.name,
+      providerName: visit.provider.specialty
+        ? `${providerName} (${visit.provider.specialty})`
+        : providerName,
+      ...clinicalRecord(visit),
+    };
   }
 
   async updateStatus(id: string, dto: UpdateVisitStatusDto) {
@@ -178,25 +199,81 @@ export class VisitsService {
     return toResponse(visit);
   }
 
-  async setVitals(id: string, dto: VisitVitalsDto) {
+  setVitals(id: string, dto: VisitVitalsDto) {
+    return this.updateVisit(id, { vitals: dto.vitals, notes: dto.notes });
+  }
+
+  /** Record the clinical narrative (presenting symptoms / diagnosis). */
+  setClinical(id: string, dto: UpdateClinicalDto) {
+    return this.updateVisit(id, { symptoms: dto.symptoms, diagnosis: dto.diagnosis });
+  }
+
+  /** Add a prescription line to a visit. */
+  async addPrescription(visitId: string, dto: CreatePrescriptionDto) {
+    await this.assertVisit(visitId);
+    // orgId is re-injected by the scoped client at runtime; passed here only to satisfy the type.
+    const created = await this.scoped.db.prescription.create({
+      data: { orgId: this.scoped.orgId, visitId, ...dto },
+    });
+    return created;
+  }
+
+  async removePrescription(visitId: string, prescriptionId: string): Promise<void> {
+    const { count } = await this.scoped.db.prescription.deleteMany({
+      where: { id: prescriptionId, visitId },
+    });
+    if (count === 0) throw new NotFoundException('Prescription not found');
+  }
+
+  /** Order a test/investigation on a visit. */
+  async addTestOrder(visitId: string, dto: CreateTestOrderDto) {
+    await this.assertVisit(visitId);
+    const created = await this.scoped.db.testOrder.create({
+      data: { orgId: this.scoped.orgId, visitId, ...dto },
+    });
+    return created;
+  }
+
+  /** Update a test order's status and/or result (e.g. once the lab reports back). */
+  async updateTestOrder(visitId: string, testOrderId: string, dto: UpdateTestOrderDto) {
+    const { count } = await this.scoped.db.testOrder.updateMany({
+      where: { id: testOrderId, visitId },
+      data: { status: dto.status, result: dto.result },
+    });
+    if (count === 0) throw new NotFoundException('Test order not found');
+    const updated = await this.scoped.db.testOrder.findFirst({
+      where: { id: testOrderId, visitId },
+    });
+    return updated;
+  }
+
+  async removeTestOrder(visitId: string, testOrderId: string): Promise<void> {
+    const { count } = await this.scoped.db.testOrder.deleteMany({
+      where: { id: testOrderId, visitId },
+    });
+    if (count === 0) throw new NotFoundException('Test order not found');
+  }
+
+  /** Shared visit-field update with a friendly 404 (used by vitals + clinical narrative). */
+  private updateVisit(id: string, data: Prisma.VisitUpdateInput) {
     return this.scoped.db.visit
-      .update({
-        where: { id },
-        data: { vitals: dto.vitals, notes: dto.notes },
-        include: PATIENT_INCLUDE,
-      })
+      .update({ where: { id }, data, include: PATIENT_INCLUDE })
       .then(toResponse)
       .catch((err: unknown) => {
-        if (
-          err &&
-          typeof err === 'object' &&
-          'code' in err &&
-          err.code === 'P2025'
-        ) {
+        if (err && typeof err === 'object' && 'code' in err && err.code === 'P2025') {
           throw new NotFoundException('Visit not found');
         }
         throw err;
       });
+  }
+
+  /** Confirm the visit exists in this org before attaching clinical children. */
+  private async assertVisit(id: string): Promise<void> {
+    const visit = await this.scoped.db.visit.findFirst({
+      where: { id },
+      select: { id: true },
+    });
+    if (!visit) throw new NotFoundException('Visit not found');
   }
 }
 
@@ -226,6 +303,45 @@ function toResponse(v: VisitWithPatient) {
     startedAt: v.startedAt,
     completedAt: v.completedAt,
     vitals: v.vitals,
+    symptoms: v.symptoms,
+    diagnosis: v.diagnosis,
     notes: v.notes,
+  };
+}
+
+/** The clinical children (prescriptions + test orders) for a visit detail view. */
+function clinicalRecord(v: {
+  prescriptions: {
+    id: string;
+    drug: string;
+    dosage: string | null;
+    frequency: string | null;
+    duration: string | null;
+    instructions: string | null;
+  }[];
+  testOrders: {
+    id: string;
+    name: string;
+    instructions: string | null;
+    status: string;
+    result: string | null;
+  }[];
+}) {
+  return {
+    prescriptions: v.prescriptions.map((p) => ({
+      id: p.id,
+      drug: p.drug,
+      dosage: p.dosage,
+      frequency: p.frequency,
+      duration: p.duration,
+      instructions: p.instructions,
+    })),
+    testOrders: v.testOrders.map((t) => ({
+      id: t.id,
+      name: t.name,
+      instructions: t.instructions,
+      status: t.status,
+      result: t.result,
+    })),
   };
 }

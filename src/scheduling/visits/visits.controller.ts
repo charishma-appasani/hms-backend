@@ -1,7 +1,9 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
+  HttpCode,
   Param,
   ParseUUIDPipe,
   Patch,
@@ -16,15 +18,24 @@ import {
   updateVisitStatusSchema,
   visitVitalsSchema,
   queueQuerySchema,
+  updateClinicalSchema,
+  createPrescriptionSchema,
+  createTestOrderSchema,
+  updateTestOrderSchema,
   type CheckInDto,
   type UpdateVisitStatusDto,
   type VisitVitalsDto,
   type QueueQueryDto,
+  type UpdateClinicalDto,
+  type CreatePrescriptionDto,
+  type CreateTestOrderDto,
+  type UpdateTestOrderDto,
 } from './dto/visit.dto';
 
 const ORG_MEMBER = ['admin', 'doctor', 'front_desk', 'nurse'] as const;
-const FRONT_DESK = ['admin', 'front_desk', 'nurse'] as const; // who checks patients in
-const CLINICAL = ['admin', 'doctor', 'nurse'] as const; // who records vitals
+// Who can check patients in / start the visit. Includes doctor (a doctor can start their own visit).
+const FRONT_DESK = ['admin', 'doctor', 'front_desk', 'nurse'] as const;
+const CLINICAL = ['admin', 'doctor', 'nurse'] as const; // who records the clinical note
 
 @Controller('visits')
 export class VisitsController {
@@ -67,5 +78,64 @@ export class VisitsController {
     @Body(new ZodValidationPipe(visitVitalsSchema)) dto: VisitVitalsDto,
   ) {
     return this.visits.setVitals(id, dto);
+  }
+
+  // ── clinical record (doctor-entered) ──
+
+  @Patch(':id/clinical')
+  @Roles(...CLINICAL)
+  setClinical(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body(new ZodValidationPipe(updateClinicalSchema)) dto: UpdateClinicalDto,
+  ) {
+    return this.visits.setClinical(id, dto);
+  }
+
+  @Post(':id/prescriptions')
+  @Roles(...CLINICAL)
+  addPrescription(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body(new ZodValidationPipe(createPrescriptionSchema)) dto: CreatePrescriptionDto,
+  ) {
+    return this.visits.addPrescription(id, dto);
+  }
+
+  @Delete(':id/prescriptions/:prescriptionId')
+  @Roles(...CLINICAL)
+  @HttpCode(204)
+  removePrescription(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Param('prescriptionId', ParseUUIDPipe) prescriptionId: string,
+  ): Promise<void> {
+    return this.visits.removePrescription(id, prescriptionId);
+  }
+
+  @Post(':id/tests')
+  @Roles(...CLINICAL)
+  addTestOrder(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body(new ZodValidationPipe(createTestOrderSchema)) dto: CreateTestOrderDto,
+  ) {
+    return this.visits.addTestOrder(id, dto);
+  }
+
+  @Patch(':id/tests/:testOrderId')
+  @Roles(...CLINICAL)
+  updateTestOrder(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Param('testOrderId', ParseUUIDPipe) testOrderId: string,
+    @Body(new ZodValidationPipe(updateTestOrderSchema)) dto: UpdateTestOrderDto,
+  ) {
+    return this.visits.updateTestOrder(id, testOrderId, dto);
+  }
+
+  @Delete(':id/tests/:testOrderId')
+  @Roles(...CLINICAL)
+  @HttpCode(204)
+  removeTestOrder(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Param('testOrderId', ParseUUIDPipe) testOrderId: string,
+  ): Promise<void> {
+    return this.visits.removeTestOrder(id, testOrderId);
   }
 }

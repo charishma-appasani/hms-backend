@@ -10,6 +10,7 @@ import { OtpService } from '../otp/otp.service';
 import { AuditService, diffFields } from '../audit/audit.service';
 import { throwMappedPrismaError } from '../common/prisma-errors';
 import { nextSequence } from '../common/sequence';
+import { formatUhid } from '../common/uhid';
 import { formatDateOnly, parseDateOnly } from '../common/datetime';
 import type {
   AppUser,
@@ -431,13 +432,6 @@ export class PatientsService {
     });
     return toPatientResponse(patient.user, patient, registration);
   }
-}
-
-/** "UH{seq:08}" → "UH00000001". Supports an optional zero-pad width. */
-function formatUhid(format: string, seq: bigint): string {
-  return format.replace(/\{seq(?::0(\d+))?\}/, (_m, pad?: string) =>
-    pad ? String(seq).padStart(Number(pad), '0') : String(seq),
-  );
 }
 
 function toPatientResponse(

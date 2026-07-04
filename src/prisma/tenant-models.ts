@@ -37,5 +37,9 @@ export const TENANT_MODELS: Record<string, TenantModelMeta> = {
   Slot: { org: true, softDelete: false, createdBy: false, updatedBy: false },
   Appointment: { org: true, softDelete: true, createdBy: true, updatedBy: true },
   Visit: { org: true, softDelete: true, createdBy: true, updatedBy: true },
+  // Clinical record children of a visit — hard-deletable lines (no soft delete). Prescriptions are
+  // write-once (createdBy only); test orders get a status/result updated later (updatedBy too).
+  Prescription: { org: true, softDelete: false, createdBy: true, updatedBy: false },
+  TestOrder: { org: true, softDelete: false, createdBy: true, updatedBy: true },
   NumberSequence: { org: true, softDelete: false, createdBy: false, updatedBy: false },
 };

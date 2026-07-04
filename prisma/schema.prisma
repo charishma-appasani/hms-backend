@@ -97,6 +97,13 @@ enum VisitStatus {
   cancelled
 }
 
+enum TestOrderStatus {
+  ordered
+  collected
+  resulted
+  cancelled
+}
+
 enum ConsentType {
   org_link
 }
@@ -202,6 +209,8 @@ model Organization {
   visits                Visit[]
   numberSequences       NumberSequence[]
   auditLogs             AuditLog[]
+  prescriptions         Prescription[]
+  testOrders            TestOrder[]
 
   @@map("organization")
 }
@@ -485,6 +494,8 @@ model Visit {
   startedAt     DateTime?   @map("started_at") @db.Timestamptz
   completedAt   DateTime?   @map("completed_at") @db.Timestamptz
   vitals        Json?
+  symptoms      String?     @db.Text // presenting complaints (free text)
+  diagnosis     String?     @db.Text // clinical impression / diagnosis (free text)
   notes         String?
   createdAt     DateTime    @default(now()) @map("created_at") @db.Timestamptz
   updatedAt     DateTime    @updatedAt @map("updated_at") @db.Timestamptz
@@ -498,10 +509,53 @@ model Visit {
   patient     Patient      @relation(fields: [patientId], references: [id])
   provider    Staff        @relation(fields: [providerId], references: [id])
   appointment Appointment? @relation(fields: [appointmentId], references: [id])
+  prescriptions Prescription[]
+  testOrders    TestOrder[]
 
   @@unique([practiceId, visitNumber])
   @@index([orgId, practiceId, providerId, status, checkInAt])
   @@map("visit")
+}
+
+// A prescribed medication line on a visit (doctor-entered). Deletable before the visit completes.
+model Prescription {
+  id           String   @id @default(uuid(7)) @db.Uuid
+  orgId        String   @map("org_id") @db.Uuid
+  visitId      String   @map("visit_id") @db.Uuid
+  drug         String   @db.VarChar(200)
+  dosage       String?  @db.VarChar(120) // e.g. "500 mg"
+  frequency    String?  @db.VarChar(120) // e.g. "twice daily"
+  duration     String?  @db.VarChar(120) // e.g. "5 days"
+  instructions String?  @db.Text
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz
+  createdBy    String?  @map("created_by") @db.Uuid
+
+  org   Organization @relation(fields: [orgId], references: [id])
+  visit Visit        @relation(fields: [visitId], references: [id])
+
+  @@index([visitId])
+  @@map("prescription")
+}
+
+// A test/investigation ordered on a visit; carries a lifecycle + result filled in later.
+model TestOrder {
+  id           String          @id @default(uuid(7)) @db.Uuid
+  orgId        String          @map("org_id") @db.Uuid
+  visitId      String          @map("visit_id") @db.Uuid
+  name         String          @db.VarChar(200)
+  instructions String?         @db.Text
+  status       TestOrderStatus @default(ordered)
+  result       String?         @db.Text
+  createdAt    DateTime        @default(now()) @map("created_at") @db.Timestamptz
+  createdBy    String?         @map("created_by") @db.Uuid
+  updatedAt    DateTime        @updatedAt @map("updated_at") @db.Timestamptz
+  updatedBy    String?         @map("updated_by") @db.Uuid
+
+  org   Organization @relation(fields: [orgId], references: [id])
+  visit Visit        @relation(fields: [visitId], references: [id])
+
+  @@index([visitId])
+  @@map("test_order")
 }
 
 // Atomic per-tenant counters (UHID, visit#). Token# comes from slot.*_booked, not here.

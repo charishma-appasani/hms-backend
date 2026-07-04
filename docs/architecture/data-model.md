@@ -200,6 +200,10 @@ CREATE TABLE staff_practice (                       -- which practices a staff m
   practice_id uuid NOT NULL REFERENCES practice(id),
   PRIMARY KEY (staff_id, practice_id)
 );
+-- NOTE (2026-06-30): table exists + is scoped, but there is NO endpoint/service to populate or
+-- enforce it yet. Today every active org member sees ALL of the org's practices (practices.list is
+-- unfiltered; writes are admin-only). Per-staff practice access ("manage only the practices I'm
+-- assigned to") is DEFERRED — needs a staff_practice CRUD + read scoping. See onboarding-and-bootstrap.md.
 
 -- OTP/consent captured when a NEW org links to a (possibly pre-existing) patient
 CREATE TABLE consent (
@@ -325,12 +329,32 @@ CREATE TABLE visit (                               -- FHIR Encounter
   started_at    timestamptz,
   completed_at  timestamptz,
   vitals        jsonb,
+  symptoms      text,                                -- Phase 2 (clinical record)
+  diagnosis     text,                                -- Phase 2 (clinical record)
   notes         text,
   created_at    timestamptz NOT NULL DEFAULT now(),
   updated_at    timestamptz NOT NULL DEFAULT now(),
   UNIQUE (practice_id, visit_number)
 );
 CREATE INDEX visit_queue_idx ON visit (org_id, practice_id, provider_id, status, check_in_at);
+
+-- Phase 2 clinical record (EMR-lite): a visit's prescriptions + ordered tests. Both org-scoped,
+-- hard-deletable lines. See phase-2-patient-portal.md (Part C) + migration 20260702035547.
+CREATE TABLE prescription (
+  id uuid PRIMARY KEY, org_id uuid NOT NULL REFERENCES organization(id),
+  visit_id uuid NOT NULL REFERENCES visit(id),
+  drug varchar(200) NOT NULL, dosage varchar(120), frequency varchar(120),
+  duration varchar(120), instructions text,
+  created_at timestamptz NOT NULL DEFAULT now(), created_by uuid
+);
+CREATE TABLE test_order (
+  id uuid PRIMARY KEY, org_id uuid NOT NULL REFERENCES organization(id),
+  visit_id uuid NOT NULL REFERENCES visit(id),
+  name varchar(200) NOT NULL, instructions text,
+  status test_order_status NOT NULL DEFAULT 'ordered', result text,
+  created_at timestamptz NOT NULL DEFAULT now(), created_by uuid,
+  updated_at timestamptz NOT NULL DEFAULT now(), updated_by uuid
+);
 
 CREATE TABLE number_sequence (                     -- atomic per-tenant counters (UHID, visit#)
   id            uuid PRIMARY KEY,

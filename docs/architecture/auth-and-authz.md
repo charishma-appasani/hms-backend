@@ -48,6 +48,33 @@ There are **no passwords in our DB** — Cognito owns credentials.
 - `@CurrentUser()` ([`current-user.decorator.ts`](../../src/auth/current-user.decorator.ts)) —
   inject the authenticated `app_user` into a handler.
 
+### `POST /platform/bootstrap` (one-time first super_admin)
+
+[`platform/bootstrap/*`](../../src/platform/bootstrap/) — `@Public`. Creates the **first** platform
+`super_admin` to solve the new-instance chicken-and-egg (no operator exists to create the first
+operator/org/admin). Guarded by an **absolute emptiness check**: it succeeds only when `app_user`
+has **zero** rows; once any user exists it returns 409, so it is inert on a live instance. Body:
+`email`, `firstName`, `lastName?`, `phone?`, `password?`. With `password` the operator can log in
+immediately (Cognito invite suppressed, permanent password set); without it Cognito emails an invite
+(needs SES). Provisioning reuses `CognitoService.provisionUser` (extended with an optional `password`
+→ `AdminSetUserPassword` permanent). The full operator runbook (bootstrap → org → admin → staff →
+patients, with `curl` examples) is in [`onboarding-and-bootstrap.md`](./onboarding-and-bootstrap.md).
+
+### `GET /config` (public runtime config for the SPA)
+
+[`config/config.controller.ts`](../../src/config/config.controller.ts) — `@Public`. Returns the
+**non-secret** Cognito values `{ region, userPoolId, userPoolClientId }` from validated env. The SPA
+fetches this once at startup (before `Amplify.configure`) instead of baking the IDs into its bundle —
+these IDs are not secrets (they ship in any browser bundle regardless). See the frontend
+`phase-1-scheduling.md` §3a.
+
+### CORS
+
+The SPA runs on a sibling origin (`api.` + UI host), so [`main.ts`](../../src/main.ts) calls
+`app.enableCors` allow-listing the UI origins (`https://aayufy.com`, `https://dev.aayufy.com`,
+`http://localhost:4200`), the methods, and the custom headers `Authorization`, `Content-Type`,
+`X-Org-Id`, `X-Practice-Id`. Tokens travel in `Authorization` (not cookies), so credentials are off.
+
 ### `GET /auth/me`
 
 [`auth.service.ts`](../../src/auth/auth.service.ts) — the session-bootstrap endpoint. Returns the

@@ -31,7 +31,46 @@ export const queueQuerySchema = z.object({
     .optional(),
 });
 
+/** Clinical narrative on the visit: presenting symptoms and/or the doctor's diagnosis (free text). */
+export const updateClinicalSchema = z
+  .object({
+    symptoms: z.string().trim().max(4000).optional(),
+    diagnosis: z.string().trim().max(4000).optional(),
+  })
+  .refine((v) => v.symptoms !== undefined || v.diagnosis !== undefined, {
+    message: 'Provide symptoms and/or diagnosis',
+  });
+
+/** A prescribed medication line. */
+export const createPrescriptionSchema = z.object({
+  drug: z.string().trim().min(1).max(200),
+  dosage: z.string().trim().max(120).optional(),
+  frequency: z.string().trim().max(120).optional(),
+  duration: z.string().trim().max(120).optional(),
+  instructions: z.string().trim().max(2000).optional(),
+});
+
+/** A test/investigation ordered on the visit. */
+export const createTestOrderSchema = z.object({
+  name: z.string().trim().min(1).max(200),
+  instructions: z.string().trim().max(2000).optional(),
+});
+
+/** Update a test order's lifecycle status and/or its result. */
+export const updateTestOrderSchema = z
+  .object({
+    status: z.enum(['ordered', 'collected', 'resulted', 'cancelled']).optional(),
+    result: z.string().trim().max(4000).optional(),
+  })
+  .refine((v) => v.status !== undefined || v.result !== undefined, {
+    message: 'Provide status and/or result',
+  });
+
 export type CheckInDto = z.infer<typeof checkInSchema>;
 export type UpdateVisitStatusDto = z.infer<typeof updateVisitStatusSchema>;
 export type VisitVitalsDto = z.infer<typeof visitVitalsSchema>;
 export type QueueQueryDto = z.infer<typeof queueQuerySchema>;
+export type UpdateClinicalDto = z.infer<typeof updateClinicalSchema>;
+export type CreatePrescriptionDto = z.infer<typeof createPrescriptionSchema>;
+export type CreateTestOrderDto = z.infer<typeof createTestOrderSchema>;
+export type UpdateTestOrderDto = z.infer<typeof updateTestOrderSchema>;

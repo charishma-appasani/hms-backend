@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
+import { ConfigController } from './config/config.controller';
 import { validateEnv } from './config/env.schema';
 import { PrismaModule } from './prisma/prisma.module';
 import { AuditModule } from './audit/audit.module';
@@ -9,9 +10,11 @@ import { NotificationModule } from './notifications/notification.module';
 import { OtpModule } from './otp/otp.module';
 import { AuthModule } from './auth/auth.module';
 import { OrganizationsModule } from './platform/organizations/organizations.module';
+import { BootstrapModule } from './platform/bootstrap/bootstrap.module';
 import { PracticesModule } from './practices/practices.module';
 import { StaffModule } from './staff/staff.module';
 import { PatientsModule } from './patients/patients.module';
+import { PatientPortalModule } from './patient-portal/patient-portal.module';
 import { AvailabilityTemplatesModule } from './scheduling/availability-templates/availability-templates.module';
 import { SlotsModule } from './scheduling/slots/slots.module';
 import { AppointmentsModule } from './scheduling/appointments/appointments.module';
@@ -29,17 +32,19 @@ import { ScheduleExceptionsModule } from './scheduling/exceptions/schedule-excep
     NotificationModule,
     OtpModule,
     AuthModule,
+    BootstrapModule,
     OrganizationsModule,
     PracticesModule,
     StaffModule,
     PatientsModule,
+    PatientPortalModule,
     AvailabilityTemplatesModule,
     SlotsModule,
     AppointmentsModule,
     VisitsModule,
     ScheduleExceptionsModule,
   ],
-  controllers: [AppController],
+  controllers: [AppController, ConfigController],
   providers: [AppService],
 })
 export class AppModule {}

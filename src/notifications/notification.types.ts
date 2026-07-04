@@ -14,6 +14,13 @@ export interface AppointmentRef {
 /** The events patients are notified about (schedule changes they didn't initiate). */
 export type NotificationEvent =
   | {
+      kind: 'appointment_booked';
+      /** Optional context for the confirmation (clinic / doctor). */
+      orgName?: string;
+      providerName?: string;
+      appointment: AppointmentRef;
+    }
+  | {
       kind: 'appointment_rescheduled';
       reason?: string;
       from: AppointmentRef;

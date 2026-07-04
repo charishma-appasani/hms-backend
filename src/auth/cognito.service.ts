@@ -16,6 +16,11 @@ export interface ProvisionUserInput {
   phone?: string;
   firstName: string;
   lastName?: string;
+  /**
+   * When set, the invite email is SUPPRESSED and this permanent password is set so the user can log
+   * in immediately (used for first-instance bootstrap). Omit for the normal staff-invite flow.
+   */
+  password?: string;
 }
 
 /** Demographics for provisioning a patient identity (phone and/or email; at least one). */
@@ -46,9 +51,11 @@ export class CognitoService {
   }
 
   /**
-   * Creates the Cognito user (emailing the invite + temporary password) and returns its immutable
-   * `sub` — stored as `app_user.cognito_sub`. If the Cognito user already exists (created earlier
-   * but never linked to an app_user), reuses it via AdminGetUser instead of failing.
+   * Creates the Cognito user and returns its immutable `sub` — stored as `app_user.cognito_sub`. By
+   * default emails the invite + temporary password (FORCE_CHANGE_PASSWORD). If `input.password` is
+   * set, the invite is suppressed and a permanent password is set so the user can log in straight
+   * away (bootstrap). If the Cognito user already exists (created earlier but never linked to an
+   * app_user), reuses it via AdminGetUser instead of failing.
    */
   async provisionUser(input: ProvisionUserInput): Promise<string> {
     const attributes: AttributeType[] = [
@@ -64,16 +71,20 @@ export class CognitoService {
       attributes.push({ Name: 'phone_number_verified', Value: 'false' });
     }
 
+    let sub: string;
     try {
       const res = await this.client.send(
         new AdminCreateUserCommand({
           UserPoolId: this.userPoolId,
           Username: input.email,
           UserAttributes: attributes,
-          DesiredDeliveryMediums: ['EMAIL'],
+          // With a password we set it ourselves (below) and don't email an invite.
+          ...(input.password
+            ? { MessageAction: 'SUPPRESS' }
+            : { DesiredDeliveryMediums: ['EMAIL'] }),
         }),
       );
-      return this.extractSub(res.User?.Attributes);
+      sub = this.extractSub(res.User?.Attributes);
     } catch (err) {
       if (err instanceof UsernameExistsException) {
         const res = await this.client.send(
@@ -82,10 +93,23 @@ export class CognitoService {
             Username: input.email,
           }),
         );
-        return this.extractSub(res.UserAttributes);
+        sub = this.extractSub(res.UserAttributes);
+      } else {
+        throw err;
       }
-      throw err;
     }
+
+    if (input.password) {
+      await this.client.send(
+        new AdminSetUserPasswordCommand({
+          UserPoolId: this.userPoolId,
+          Username: input.email,
+          Password: input.password,
+          Permanent: true,
+        }),
+      );
+    }
+    return sub;
   }
 
   /**

@@ -13,10 +13,15 @@ import * as logs from 'aws-cdk-lib/aws-logs';
 import * as rds from 'aws-cdk-lib/aws-rds';
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import { Construct } from 'constructs';
+import { FrontendHosting } from './frontend-hosting';
 
 export interface InfrastructureStackProps extends cdk.StackProps {
-  /** ACM cert ARN in THIS region for HTTPS. If absent, the ALB serves HTTP on :80 only. */
+  /** ACM cert ARN in THIS region for the ALB HTTPS listener. If absent, the ALB serves HTTP on :80 only. */
   certificateArn?: string;
+  /** Frontend SPA custom domain, e.g. `dev.aayufy.com` (paired with `frontendCertificateArn`). */
+  frontendDomainName?: string;
+  /** ACM cert ARN for the frontend domain — must be in **us-east-1** (CloudFront requirement). */
+  frontendCertificateArn?: string;
 }
 
 /**
@@ -30,7 +35,7 @@ export class InfrastructureStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props: InfrastructureStackProps) {
     super(scope, id, props);
 
-    const { certificateArn } = props;
+    const { certificateArn, frontendDomainName, frontendCertificateArn } = props;
 
     // ─────────────────────────── ECR ───────────────────────────
     const repository = new ecr.Repository(this, 'HMSRepository', {
@@ -264,6 +269,15 @@ export class InfrastructureStack extends cdk.Stack {
       },
     );
 
+    // ──────────────── Frontend hosting (S3 + CloudFront + SPA deploy role) ────────────────
+    // A component of this single stack — it reuses the OIDC provider above (passed in memory, no
+    // cross-stack reference). See lib/frontend-hosting.ts.
+    new FrontendHosting(this, 'Frontend', {
+      githubOidcProvider,
+      domainName: frontendDomainName,
+      certificateArn: frontendCertificateArn,
+    });
+
     // The workflow runs with `environment: production`, so the OIDC token's `sub` claim is
     // `repo:<owner>/<repo>:environment:production` (NOT `:ref:refs/heads/main`). The trust
     // condition below must match that exactly. Create the `production` environment in the
@@ -321,29 +335,30 @@ export class InfrastructureStack extends cdk.Stack {
       },
     );
 
-    if (certificateArn) {
-      const certificate = acm.Certificate.fromCertificateArn(
-        this,
-        'Certificate',
-        certificateArn,
-      );
-      alb.addListener('HttpRedirect', {
-        port: 80,
-        defaultAction: elbv2.ListenerAction.redirect({
-          protocol: 'HTTPS',
-          port: '443',
-          permanent: true,
-        }),
-      });
+    const certificate = certificateArn
+      ? acm.Certificate.fromCertificateArn(this, 'Certificate', certificateArn)
+      : undefined;
+
+    // The port-80 listener keeps a STABLE construct id ('HttpListener') whether or not a cert is
+    // present, so toggling HTTPS is an in-place default-action change — NOT a delete+create, which
+    // collides on the port ("A listener already exists on this port"). With a cert it 301-redirects
+    // to 443; without one it forwards straight to the app.
+    alb.addListener('HttpListener', {
+      port: 80,
+      defaultAction: certificate
+        ? elbv2.ListenerAction.redirect({
+            protocol: 'HTTPS',
+            port: '443',
+            permanent: true,
+          })
+        : elbv2.ListenerAction.forward([targetGroup]),
+    });
+
+    // HTTPS listener only exists when a cert is supplied (port 443 never collides with 80).
+    if (certificate) {
       alb.addListener('HttpsListener', {
         port: 443,
         certificates: [certificate],
-        defaultTargetGroups: [targetGroup],
-      });
-    } else {
-      // No cert yet — serve HTTP on :80 (add `-c certificateArn=...` later for HTTPS + redirect).
-      alb.addListener('HttpListener', {
-        port: 80,
         defaultTargetGroups: [targetGroup],
       });
     }
