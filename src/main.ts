@@ -1,3 +1,4 @@
+import { Logger } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import {
   FastifyAdapter,
@@ -6,6 +7,7 @@ import {
 import { AppModule } from './app.module';
 
 async function bootstrap() {
+  const logger = new Logger('Bootstrap');
   const app = await NestFactory.create<NestFastifyApplication>(
     AppModule,
     // trustProxy: derive client IP from X-Forwarded-For (the app is only reachable via the ALB,
@@ -34,6 +36,20 @@ async function bootstrap() {
 
   // Ensures OnModuleDestroy (PrismaService.$disconnect) runs on SIGINT/SIGTERM.
   app.enableShutdownHooks();
-  await app.listen(process.env.PORT ?? 3000, '0.0.0.0');
+
+  const port = process.env.PORT ?? 3000;
+  await app.listen(port, '0.0.0.0');
+  logger.log(
+    `HMS API listening on port ${port} (${process.env.NODE_ENV ?? 'development'})`,
+  );
 }
-bootstrap();
+
+bootstrap().catch((err) => {
+  // Nothing above us can handle a failed boot — log it and exit non-zero so the orchestrator
+  // (ECS) restarts the task rather than leaving a half-started process running.
+  new Logger('Bootstrap').fatal(
+    'Failed to start HMS API',
+    err instanceof Error ? err.stack : err,
+  );
+  process.exit(1);
+});

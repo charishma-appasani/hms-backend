@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { ScopedPrismaService } from '../prisma/scoped-prisma.service';
 import { throwMappedPrismaError } from '../common/prisma-errors';
 import type { CreatePracticeDto, UpdatePracticeDto } from './dto/practice.dto';
@@ -10,6 +10,8 @@ import type { CreatePracticeDto, UpdatePracticeDto } from './dto/practice.dto';
  */
 @Injectable()
 export class PracticesService {
+  private readonly logger = new Logger(PracticesService.name);
+
   constructor(private readonly scoped: ScopedPrismaService) {}
 
   create(dto: CreatePracticeDto) {
@@ -19,11 +21,19 @@ export class PracticesService {
     // the type; the scoped client re-injects the same value (+ audit) at runtime.
     return this.scoped.db
       .$transaction(async (tx) => {
-        const addr = address ? await tx.address.create({ data: address }) : null;
+        const addr = address
+          ? await tx.address.create({ data: address })
+          : null;
         return tx.practice.create({
           data: { ...practice, orgId: this.scoped.orgId, addressId: addr?.id },
           include: { address: true },
         });
+      })
+      .then((created) => {
+        this.logger.log(
+          `Practice created: id=${created.id} code=${created.code} org=${this.scoped.orgId}`,
+        );
+        return created;
       })
       .catch((err: unknown) =>
         throwMappedPrismaError(err, {
@@ -63,7 +73,10 @@ export class PracticesService {
         let addressId = existing.addressId;
         if (address) {
           if (addressId) {
-            await tx.address.update({ where: { id: addressId }, data: address });
+            await tx.address.update({
+              where: { id: addressId },
+              data: address,
+            });
           } else {
             addressId = (await tx.address.create({ data: address })).id;
           }
@@ -78,7 +91,8 @@ export class PracticesService {
       .catch((err: unknown) =>
         throwMappedPrismaError(err, {
           notFound: 'Practice not found',
-          conflict: 'A practice with that code already exists in this organization',
+          conflict:
+            'A practice with that code already exists in this organization',
         }),
       );
   }
@@ -90,5 +104,6 @@ export class PracticesService {
       .catch((err: unknown) =>
         throwMappedPrismaError(err, { notFound: 'Practice not found' }),
       );
+    this.logger.log(`Practice soft-deleted: id=${id} org=${this.scoped.orgId}`);
   }
 }

@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { ScopedPrismaService } from '../prisma/scoped-prisma.service';
 import { CognitoService } from '../auth/cognito.service';
@@ -23,6 +23,8 @@ const USER_SELECT = {
  */
 @Injectable()
 export class StaffService {
+  private readonly logger = new Logger(StaffService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly scoped: ScopedPrismaService,
@@ -51,8 +53,14 @@ export class StaffService {
         entityId: staff.id,
         metadata: { userId, roles: dto.roles },
       });
+      this.logger.log(
+        `Staff added: id=${staff.id} user=${userId} org=${this.scoped.orgId} roles=[${dto.roles.join(',')}]`,
+      );
       return staff;
     } catch (err) {
+      this.logger.warn(
+        `Staff creation failed for user=${userId} org=${this.scoped.orgId}: ${String(err)}`,
+      );
       throwMappedPrismaError(err, {
         conflict: 'This user is already staff at this organization',
       });
@@ -93,6 +101,7 @@ export class StaffService {
       .catch((err: unknown) =>
         throwMappedPrismaError(err, { notFound: 'Staff member not found' }),
       );
+    this.logger.log(`Staff removed: id=${id} org=${this.scoped.orgId}`);
   }
 
   /**

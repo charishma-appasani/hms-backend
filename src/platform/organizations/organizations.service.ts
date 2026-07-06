@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { throwMappedPrismaError } from '../../common/prisma-errors';
 import type {
@@ -17,12 +17,21 @@ import type {
  */
 @Injectable()
 export class OrganizationsService {
+  private readonly logger = new Logger(OrganizationsService.name);
+
   constructor(private readonly prisma: PrismaService) {}
 
   create(dto: CreateOrganizationDto, actorId: string) {
-    return this.prisma.organization.create({
-      data: { ...dto, createdBy: actorId, updatedBy: actorId },
-    });
+    return this.prisma.organization
+      .create({
+        data: { ...dto, createdBy: actorId, updatedBy: actorId },
+      })
+      .then((org) => {
+        this.logger.log(
+          `Organization created: id=${org.id} name="${org.name}" actor=${actorId}`,
+        );
+        return org;
+      });
   }
 
   list() {
@@ -60,5 +69,6 @@ export class OrganizationsService {
       .catch((err: unknown) =>
         throwMappedPrismaError(err, { notFound: 'Organization not found' }),
       );
+    this.logger.warn(`Organization soft-deleted: id=${id} actor=${actorId}`);
   }
 }

@@ -2,6 +2,7 @@ import {
   BadRequestException,
   ConflictException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { ScopedPrismaService } from '../../prisma/scoped-prisma.service';
@@ -50,6 +51,8 @@ const CHECKABLE = ['confirmed', 'checked_in'];
  */
 @Injectable()
 export class VisitsService {
+  private readonly logger = new Logger(VisitsService.name);
+
   constructor(private readonly scoped: ScopedPrismaService) {}
 
   async checkIn(appointmentId: string) {
@@ -76,7 +79,8 @@ export class VisitsService {
         where: { appointmentId },
         select: { id: true },
       });
-      if (already) throw new ConflictException('Appointment is already checked in');
+      if (already)
+        throw new ConflictException('Appointment is already checked in');
 
       const seq = await nextSequence(tx, {
         orgId,
@@ -108,6 +112,9 @@ export class VisitsService {
       }
       return created;
     });
+    this.logger.log(
+      `Visit checked in: visit=${visit.id} visitNumber=${visit.visitNumber} appointment=${appointmentId} patient=${visit.patientId} token=${visit.tokenNumber}`,
+    );
     return toResponse(visit);
   }
 
@@ -145,14 +152,18 @@ export class VisitsService {
         ...PATIENT_INCLUDE,
         practice: { select: { name: true, org: { select: { name: true } } } },
         provider: {
-          select: { specialty: true, user: { select: { firstName: true, lastName: true } } },
+          select: {
+            specialty: true,
+            user: { select: { firstName: true, lastName: true } },
+          },
         },
         prescriptions: { orderBy: { createdAt: 'asc' } },
         testOrders: { orderBy: { createdAt: 'asc' } },
       },
     });
     if (!visit) throw new NotFoundException('Visit not found');
-    const providerName = `${visit.provider.user.firstName} ${visit.provider.user.lastName ?? ''}`.trim();
+    const providerName =
+      `${visit.provider.user.firstName} ${visit.provider.user.lastName ?? ''}`.trim();
     return {
       ...toResponse(visit),
       orgName: visit.practice.org.name,
@@ -165,37 +176,42 @@ export class VisitsService {
   }
 
   async updateStatus(id: string, dto: UpdateVisitStatusDto) {
-    const visit = await this.scoped.db.$transaction(async (tx) => {
-      const current = await tx.visit.findFirst({
-        where: { id },
-        select: { id: true, status: true, appointmentId: true },
-      });
-      if (!current) throw new NotFoundException('Visit not found');
-      if (!TRANSITIONS[current.status].includes(dto.status)) {
-        throw new ConflictException(
-          `Cannot move a visit from '${current.status}' to '${dto.status}'`,
-        );
-      }
-
-      const data: Prisma.VisitUpdateInput = { status: dto.status };
-      if (dto.status === 'in_consultation') data.startedAt = new Date();
-      if (dto.status === 'completed') data.completedAt = new Date();
-
-      const updated = await tx.visit.update({
-        where: { id },
-        data,
-        include: PATIENT_INCLUDE,
-      });
-
-      // Completing the visit fulfils its appointment (closes the OPD loop).
-      if (dto.status === 'completed' && current.appointmentId) {
-        await tx.appointment.update({
-          where: { id: current.appointmentId },
-          data: { status: 'fulfilled' },
+    const { visit, previousStatus } = await this.scoped.db.$transaction(
+      async (tx) => {
+        const current = await tx.visit.findFirst({
+          where: { id },
+          select: { id: true, status: true, appointmentId: true },
         });
-      }
-      return updated;
-    });
+        if (!current) throw new NotFoundException('Visit not found');
+        if (!TRANSITIONS[current.status].includes(dto.status)) {
+          throw new ConflictException(
+            `Cannot move a visit from '${current.status}' to '${dto.status}'`,
+          );
+        }
+
+        const data: Prisma.VisitUpdateInput = { status: dto.status };
+        if (dto.status === 'in_consultation') data.startedAt = new Date();
+        if (dto.status === 'completed') data.completedAt = new Date();
+
+        const updated = await tx.visit.update({
+          where: { id },
+          data,
+          include: PATIENT_INCLUDE,
+        });
+
+        // Completing the visit fulfils its appointment (closes the OPD loop).
+        if (dto.status === 'completed' && current.appointmentId) {
+          await tx.appointment.update({
+            where: { id: current.appointmentId },
+            data: { status: 'fulfilled' },
+          });
+        }
+        return { visit: updated, previousStatus: current.status };
+      },
+    );
+    this.logger.log(
+      `Visit status changed: visit=${id} ${previousStatus} -> ${dto.status} patient=${visit.patientId}`,
+    );
     return toResponse(visit);
   }
 
@@ -205,7 +221,10 @@ export class VisitsService {
 
   /** Record the clinical narrative (presenting symptoms / diagnosis). */
   setClinical(id: string, dto: UpdateClinicalDto) {
-    return this.updateVisit(id, { symptoms: dto.symptoms, diagnosis: dto.diagnosis });
+    return this.updateVisit(id, {
+      symptoms: dto.symptoms,
+      diagnosis: dto.diagnosis,
+    });
   }
 
   /** Add a prescription line to a visit. */
@@ -215,14 +234,21 @@ export class VisitsService {
     const created = await this.scoped.db.prescription.create({
       data: { orgId: this.scoped.orgId, visitId, ...dto },
     });
+    this.logger.log(`Prescription added: id=${created.id} visit=${visitId}`);
     return created;
   }
 
-  async removePrescription(visitId: string, prescriptionId: string): Promise<void> {
+  async removePrescription(
+    visitId: string,
+    prescriptionId: string,
+  ): Promise<void> {
     const { count } = await this.scoped.db.prescription.deleteMany({
       where: { id: prescriptionId, visitId },
     });
     if (count === 0) throw new NotFoundException('Prescription not found');
+    this.logger.log(
+      `Prescription removed: id=${prescriptionId} visit=${visitId}`,
+    );
   }
 
   /** Order a test/investigation on a visit. */
@@ -231,11 +257,16 @@ export class VisitsService {
     const created = await this.scoped.db.testOrder.create({
       data: { orgId: this.scoped.orgId, visitId, ...dto },
     });
+    this.logger.log(`Test order added: id=${created.id} visit=${visitId}`);
     return created;
   }
 
   /** Update a test order's status and/or result (e.g. once the lab reports back). */
-  async updateTestOrder(visitId: string, testOrderId: string, dto: UpdateTestOrderDto) {
+  async updateTestOrder(
+    visitId: string,
+    testOrderId: string,
+    dto: UpdateTestOrderDto,
+  ) {
     const { count } = await this.scoped.db.testOrder.updateMany({
       where: { id: testOrderId, visitId },
       data: { status: dto.status, result: dto.result },
@@ -260,7 +291,12 @@ export class VisitsService {
       .update({ where: { id }, data, include: PATIENT_INCLUDE })
       .then(toResponse)
       .catch((err: unknown) => {
-        if (err && typeof err === 'object' && 'code' in err && err.code === 'P2025') {
+        if (
+          err &&
+          typeof err === 'object' &&
+          'code' in err &&
+          err.code === 'P2025'
+        ) {
           throw new NotFoundException('Visit not found');
         }
         throw err;

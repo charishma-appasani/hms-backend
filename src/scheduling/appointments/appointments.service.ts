@@ -2,6 +2,7 @@ import {
   BadRequestException,
   ConflictException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { ScopedPrismaService } from '../../prisma/scoped-prisma.service';
@@ -16,10 +17,7 @@ import type {
   AppointmentType,
   Prisma,
 } from '../../../generated/prisma/client';
-import type {
-  BookAppointmentDto,
-  WalkInDto,
-} from './dto/book-appointment.dto';
+import type { BookAppointmentDto, WalkInDto } from './dto/book-appointment.dto';
 
 /** Which slot capacity bucket a channel draws on. */
 export type Bucket = 'appt' | 'walkin';
@@ -35,10 +33,18 @@ const PATIENT_INCLUDE = {
   },
 } as const;
 
-const CANCELLABLE: AppointmentStatus[] = ['requested', 'confirmed', 'checked_in'];
+const CANCELLABLE: AppointmentStatus[] = [
+  'requested',
+  'confirmed',
+  'checked_in',
+];
 // Manual reschedule covers walk-ins too (checked_in) — a still-waiting visit is cancelled. (The
 // block auto-relocate flow uses a narrower set: it never moves a checked-in/present patient.)
-const RESCHEDULABLE: AppointmentStatus[] = ['requested', 'confirmed', 'checked_in'];
+const RESCHEDULABLE: AppointmentStatus[] = [
+  'requested',
+  'confirmed',
+  'checked_in',
+];
 
 export interface ListAppointmentsFilter {
   providerId?: string;
@@ -57,6 +63,8 @@ export interface ListAppointmentsFilter {
  */
 @Injectable()
 export class AppointmentsService {
+  private readonly logger = new Logger(AppointmentsService.name);
+
   constructor(
     private readonly scoped: ScopedPrismaService,
     private readonly audit: AuditService,
@@ -119,7 +127,10 @@ export class AppointmentsService {
       );
     }
 
-    const sessionDate = utcToZonedDateOnly(slot.startAt, slot.practice.timezone);
+    const sessionDate = utcToZonedDateOnly(
+      slot.startAt,
+      slot.practice.timezone,
+    );
     const orgId = this.scoped.orgId;
 
     const { appointment, reserved } = await this.scoped.db.$transaction(
@@ -161,12 +172,22 @@ export class AppointmentsService {
         entityType: 'appointment',
         entityId: appointment.id,
         patientId,
-        metadata: { slotId, tokenNumber: appointment.tokenNumber, channel: opts.channel },
+        metadata: {
+          slotId,
+          tokenNumber: appointment.tokenNumber,
+          channel: opts.channel,
+        },
       });
+      this.logger.log(
+        `Appointment booked: id=${appointment.id} patient=${patientId} slot=${slotId} token=${appointment.tokenNumber} channel=${opts.channel}`,
+      );
       // Confirmation to the patient (best-effort; channel errors are swallowed by the service).
       await this.notifications.notify(recipientOf(appointment), {
         kind: 'appointment_booked',
-        appointment: { sessionDate: response.sessionDate, tokenNumber: response.tokenNumber },
+        appointment: {
+          sessionDate: response.sessionDate,
+          tokenNumber: response.tokenNumber,
+        },
       });
       return response;
     }
@@ -177,9 +198,20 @@ export class AppointmentsService {
       entityType: 'appointment',
       entityId: appointment.id,
       patientId,
-      metadata: { slotId, tokenNumber: appointment.tokenNumber, walkinOverLimit: overLimit },
+      metadata: {
+        slotId,
+        tokenNumber: appointment.tokenNumber,
+        walkinOverLimit: overLimit,
+      },
     });
-    return { ...response, walkinOverbooked: overLimit > 0, walkinOverLimit: overLimit };
+    this.logger.log(
+      `Walk-in registered: id=${appointment.id} patient=${patientId} slot=${slotId} token=${appointment.tokenNumber} overLimit=${overLimit}`,
+    );
+    return {
+      ...response,
+      walkinOverbooked: overLimit > 0,
+      walkinOverLimit: overLimit,
+    };
   }
 
   list(filter: ListAppointmentsFilter) {
@@ -249,9 +281,15 @@ export class AppointmentsService {
       patientId: appointment.patientId,
       metadata: { slotId: appointment.slotId, previousStatus },
     });
+    this.logger.log(
+      `Appointment cancelled: id=${appointment.id} patient=${appointment.patientId} slot=${appointment.slotId} from=${previousStatus}`,
+    );
     await this.notifications.notify(recipientOf(appointment), {
       kind: 'appointment_cancelled',
-      appointment: { sessionDate: toResponse(appointment).sessionDate, tokenNumber: appointment.tokenNumber },
+      appointment: {
+        sessionDate: toResponse(appointment).sessionDate,
+        tokenNumber: appointment.tokenNumber,
+      },
     });
     return toResponse(appointment);
   }
@@ -368,6 +406,9 @@ export class AppointmentsService {
         tokenNumber: created.tokenNumber,
       },
     });
+    this.logger.log(
+      `Appointment rescheduled: from=${id} to=${created.id} patient=${created.patientId} fromSlot=${old.slotId} toSlot=${newSlotId} token=${created.tokenNumber}`,
+    );
     return toResponse(created);
   }
 }
@@ -377,7 +418,10 @@ export interface SeatCounters {
   walkinBooked: number;
 }
 
-export type RawTx = Pick<Prisma.TransactionClient, '$queryRaw' | '$executeRawUnsafe'>;
+export type RawTx = Pick<
+  Prisma.TransactionClient,
+  '$queryRaw' | '$executeRawUnsafe'
+>;
 
 /**
  * Atomically reserve a seat in a slot's bucket (a single conditional UPDATE — column<column isn't

@@ -31,6 +31,11 @@ export interface InfrastructureStackProps extends cdk.StackProps {
  * CI pipeline only builds/pushes the image to ECR `:latest` and rolls the service via
  * `aws ecs update-service --force-new-deployment`.
  */
+/**
+ * certificateArn arn:aws:acm:ap-south-2:201063584490:certificate/7f62cc8c-5d09-491b-a105-05c49cb86a90
+ * frontendDomainName dev.aayufy.com
+ * frontendCertificateArn arn:aws:acm:us-east-1:201063584490:certificate/41f30053-9152-46f5-9972-23f841cc2a33
+ */
 export class InfrastructureStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props: InfrastructureStackProps) {
     super(scope, id, props);

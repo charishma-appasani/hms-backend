@@ -1,4 +1,4 @@
-import { ConflictException, Injectable } from '@nestjs/common';
+import { ConflictException, Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { CognitoService } from '../../auth/cognito.service';
 import type { BootstrapDto } from './dto/bootstrap.dto';
@@ -10,6 +10,8 @@ import type { BootstrapDto } from './dto/bootstrap.dto';
  */
 @Injectable()
 export class BootstrapService {
+  private readonly logger = new Logger(BootstrapService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly cognito: CognitoService,
@@ -19,6 +21,9 @@ export class BootstrapService {
     // Absolute new-instance check: any user at all (operator, staff, or patient) closes this door.
     const userCount = await this.prisma.appUser.count();
     if (userCount > 0) {
+      this.logger.warn(
+        'Bootstrap attempted on an already-initialized system — rejected',
+      );
       throw new ConflictException('System is already initialized');
     }
 
@@ -41,6 +46,9 @@ export class BootstrapService {
       },
     });
 
+    this.logger.log(
+      `Platform bootstrapped: first super_admin created userId=${user.id} loginReady=${Boolean(dto.password)}`,
+    );
     return {
       id: user.id,
       email: user.email,

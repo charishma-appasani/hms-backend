@@ -1,6 +1,7 @@
 import {
   ConflictException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
@@ -39,6 +40,8 @@ const LINK_PURPOSE = 'patient_link';
  */
 @Injectable()
 export class PatientsService {
+  private readonly logger = new Logger(PatientsService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly scoped: ScopedPrismaService,
@@ -111,8 +114,14 @@ export class PatientsService {
         patientId: patient.id,
         metadata: { uhid: registration.uhid, via: 'staff' },
       });
+      this.logger.log(
+        `Patient registered by staff: patientId=${patient.id} uhid=${registration.uhid} org=${orgId} actor=${actorId}`,
+      );
       return toPatientResponse(user, patient, registration);
     } catch (err) {
+      this.logger.warn(
+        `Patient staff-registration failed for org=${orgId} actor=${actorId}: ${String(err)}`,
+      );
       return throwMappedPrismaError(err, {
         conflict: 'A patient with this phone, email, or ABHA already exists',
       });
@@ -160,7 +169,9 @@ export class PatientsService {
       include: { patient: { include: { user: true } } },
     });
     if (!registration) {
-      throw new NotFoundException('Patient is not registered at this organization');
+      throw new NotFoundException(
+        'Patient is not registered at this organization',
+      );
     }
     return toPatientResponse(
       registration.patient.user,
@@ -177,7 +188,9 @@ export class PatientsService {
       include: { patient: { include: { user: true } } },
     });
     if (!registration) {
-      throw new NotFoundException('Patient is not registered at this organization');
+      throw new NotFoundException(
+        'Patient is not registered at this organization',
+      );
     }
     if (dto.phone || dto.email) {
       await this.assertUniqueContact(
@@ -189,31 +202,35 @@ export class PatientsService {
     const before = registration.patient.user;
 
     try {
-      const { user, patient } = await this.scoped.db.$transaction(async (tx) => {
-        const user = await tx.appUser.update({
-          where: { id: registration.patient.userId },
-          data: {
-            firstName: dto.firstName,
-            lastName: dto.lastName,
-            phone: dto.phone,
-            email: dto.email,
-            dateOfBirth: dto.dateOfBirth
-              ? parseDateOnly(dto.dateOfBirth)
-              : undefined,
-            gender: dto.gender,
-            updatedByOrg: orgId, // cross-org demographic attribution (last-write-wins)
-            updatedByUser: actorId,
-          },
-        });
-        const patient =
-          dto.abhaNumber !== undefined
-            ? await tx.patient.update({
-                where: { id: patientId },
-                data: { abhaNumber: dto.abhaNumber },
-              })
-            : await tx.patient.findUniqueOrThrow({ where: { id: patientId } });
-        return { user, patient };
-      });
+      const { user, patient } = await this.scoped.db.$transaction(
+        async (tx) => {
+          const user = await tx.appUser.update({
+            where: { id: registration.patient.userId },
+            data: {
+              firstName: dto.firstName,
+              lastName: dto.lastName,
+              phone: dto.phone,
+              email: dto.email,
+              dateOfBirth: dto.dateOfBirth
+                ? parseDateOnly(dto.dateOfBirth)
+                : undefined,
+              gender: dto.gender,
+              updatedByOrg: orgId, // cross-org demographic attribution (last-write-wins)
+              updatedByUser: actorId,
+            },
+          });
+          const patient =
+            dto.abhaNumber !== undefined
+              ? await tx.patient.update({
+                  where: { id: patientId },
+                  data: { abhaNumber: dto.abhaNumber },
+                })
+              : await tx.patient.findUniqueOrThrow({
+                  where: { id: patientId },
+                });
+          return { user, patient };
+        },
+      );
       const changes = diffFields(
         {
           firstName: before.firstName,
@@ -244,6 +261,9 @@ export class PatientsService {
           patientId,
           metadata: { changes },
         });
+        this.logger.log(
+          `Patient updated: patientId=${patientId} org=${orgId} actor=${actorId} fields=[${Object.keys(changes).join(',')}]`,
+        );
       }
       return toPatientResponse(user, patient, registration);
     } catch (err) {
@@ -279,7 +299,12 @@ export class PatientsService {
 
     // Phone verified — but it (or the email) may already belong to an account.
     const existing = await this.prisma.appUser.findFirst({
-      where: { OR: [{ phone: dto.phone }, ...(dto.email ? [{ email: dto.email }] : [])] },
+      where: {
+        OR: [
+          { phone: dto.phone },
+          ...(dto.email ? [{ email: dto.email }] : []),
+        ],
+      },
       select: { id: true },
     });
     if (existing) {
@@ -320,6 +345,7 @@ export class PatientsService {
       patientId: patient.id,
       metadata: { via: 'self' }, // public route → no actor/org context
     });
+    this.logger.log(`Patient self-signup completed: patientId=${patient.id}`);
     return {
       patientId: patient.id,
       message: 'Signup complete. You can now log in.',
@@ -430,6 +456,9 @@ export class PatientsService {
       patientId: patient.id,
       metadata: { uhid: registration.uhid, consentId: registration.consentId },
     });
+    this.logger.log(
+      `Patient linked to org: patientId=${patient.id} uhid=${registration.uhid} org=${orgId} registration=${registration.id}`,
+    );
     return toPatientResponse(patient.user, patient, registration);
   }
 }
