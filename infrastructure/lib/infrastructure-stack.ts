@@ -298,8 +298,9 @@ export class InfrastructureStack extends cdk.Stack {
 
     // ECR: push/pull the hms image (grantPullPush also adds ecr:GetAuthorizationToken on *).
     repository.grantPullPush(githubDeployRole);
-    // ECS: roll the service onto the new image (CDK owns the task def, so CI only needs this —
-    // no RegisterTaskDefinition / PassRole).
+    // ECS: roll the service onto the new image (CDK owns the task def, so CI needs no
+    // RegisterTaskDefinition). The one-off migration task additionally needs RunTask/DescribeTasks
+    // + PassRole — granted below, once the task definition and its roles are in scope.
     githubDeployRole.addToPolicy(
       new iam.PolicyStatement({
         actions: ['ecs:UpdateService', 'ecs:DescribeServices'],
@@ -413,6 +414,31 @@ export class InfrastructureStack extends cdk.Stack {
       },
       logging: ecs.LogDrivers.awsLogs({ streamPrefix: 'hms', logGroup }),
     });
+
+    // Let the GitHub deploy role run the one-off DB migration task (aws.yml → `prisma migrate
+    // deploy`). RunTask is scoped to this task def (any revision); DescribeTasks polls the task's
+    // exit code (dynamic task ARNs → `*`); PassRole is required so RunTask can hand the task its
+    // task + execution roles — scoped to exactly those two roles.
+    githubDeployRole.addToPolicy(
+      new iam.PolicyStatement({
+        actions: ['ecs:RunTask'],
+        resources: [
+          `arn:aws:ecs:${this.region}:${this.account}:task-definition/${taskDefinition.family}:*`,
+        ],
+      }),
+    );
+    githubDeployRole.addToPolicy(
+      new iam.PolicyStatement({
+        actions: ['ecs:DescribeTasks'],
+        resources: ['*'],
+      }),
+    );
+    githubDeployRole.addToPolicy(
+      new iam.PolicyStatement({
+        actions: ['iam:PassRole'],
+        resources: [taskRole.roleArn, taskExecutionRole.roleArn],
+      }),
+    );
 
     const service = new ecs.FargateService(this, 'Service', {
       cluster,
