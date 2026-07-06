@@ -8,7 +8,7 @@ How users come to exist in Polaris, from a brand-new instance to a fully populat
 
 | Actor | Stored as | Created by |
 | --- | --- | --- |
-| **Platform operator** (`super_admin` / `support`) | `app_user.platform_role` | Bootstrap (first one) → then DB only |
+| **Platform operator** (`super_admin` / `support`) | `app_user.platform_role` | Bootstrap (first one) → then `super_admin` via `POST /platform/users` (Cognito invite; reuses an existing app_user's identity). `DELETE /platform/users/:id` revokes the role (not self) |
 | **Organization** (tenant) | `organization` | `super_admin` via `POST /platform/organizations` |
 | **Staff** (admin / doctor / nurse / front_desk) | `staff` membership + global `app_user` | `POST /staff` (org admin, or super_admin assuming the org) |
 | **Patient** | `patient` + global `app_user` (+ per-org `patient_registration`) | `POST /patients` (staff), public OTP self-signup, or OTP cross-org link |

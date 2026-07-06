@@ -10,6 +10,7 @@ import { NotificationModule } from './notifications/notification.module';
 import { OtpModule } from './otp/otp.module';
 import { AuthModule } from './auth/auth.module';
 import { OrganizationsModule } from './platform/organizations/organizations.module';
+import { PlatformUsersModule } from './platform/users/platform-users.module';
 import { BootstrapModule } from './platform/bootstrap/bootstrap.module';
 import { PracticesModule } from './practices/practices.module';
 import { StaffModule } from './staff/staff.module';
@@ -34,6 +35,7 @@ import { ScheduleExceptionsModule } from './scheduling/exceptions/schedule-excep
     AuthModule,
     BootstrapModule,
     OrganizationsModule,
+    PlatformUsersModule,
     PracticesModule,
     StaffModule,
     PatientsModule,
