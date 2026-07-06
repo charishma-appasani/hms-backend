@@ -73,6 +73,11 @@ EXPOSE 3000
 # Set NODE_ENV
 ENV NODE_ENV=production
 
+# Trust the Amazon RDS CA bundle downloaded above. The pg driver (via @prisma/adapter-pg) now
+# treats sslmode=require as verify-full, so it validates the RDS server cert against Node's trust
+# store. NODE_EXTRA_CA_CERTS appends this bundle to the default CAs so verification succeeds.
+ENV NODE_EXTRA_CA_CERTS=/etc/ssl/certs/rds-ca.pem
+
 # Health check
 HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
     CMD wget --no-verbose --tries=1 --spider http://localhost:3000/ || exit 1
