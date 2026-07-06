@@ -55,6 +55,43 @@ jobs:
             --sbom=false \
             --push .
 
+      # Apply DB migrations BEFORE rolling the app, as a one-off ECS task in the VPC (RDS is in
+      # isolated subnets, unreachable from this runner). We reuse the service's own task definition
+      # (→ :latest, the image just pushed, which now ships the Prisma CLI + prisma/ migrations) and
+      # its network configuration, overriding only the container command. Fails the deploy if the
+      # migration container exits non-zero. See docs/architecture/config-and-secrets.md §Migrations.
+      - name: Run database migrations (prisma migrate deploy)
+        run: |
+          set -euo pipefail
+          TASK_DEF=$(aws ecs describe-services \
+            --cluster "$ECS_CLUSTER" --services "$ECS_SERVICE" --region "$AWS_REGION" \
+            --query 'services[0].taskDefinition' --output text)
+          NETWORK_CONFIG=$(aws ecs describe-services \
+            --cluster "$ECS_CLUSTER" --services "$ECS_SERVICE" --region "$AWS_REGION" \
+            --query 'services[0].networkConfiguration' --output json)
+
+          TASK_ARN=$(aws ecs run-task \
+            --cluster "$ECS_CLUSTER" \
+            --task-definition "$TASK_DEF" \
+            --launch-type FARGATE \
+            --network-configuration "$NETWORK_CONFIG" \
+            --overrides '{"containerOverrides":[{"name":"hms","command":["npx","prisma","migrate","deploy"]}]}' \
+            --region "$AWS_REGION" \
+            --query 'tasks[0].taskArn' --output text)
+          echo "Migration task: $TASK_ARN"
+
+          aws ecs wait tasks-stopped \
+            --cluster "$ECS_CLUSTER" --tasks "$TASK_ARN" --region "$AWS_REGION"
+
+          EXIT_CODE=$(aws ecs describe-tasks \
+            --cluster "$ECS_CLUSTER" --tasks "$TASK_ARN" --region "$AWS_REGION" \
+            --query 'tasks[0].containers[?name==`hms`].exitCode | [0]' --output text)
+          echo "Migration container exit code: $EXIT_CODE"
+          if [ "$EXIT_CODE" != "0" ]; then
+            echo "::error::Database migration failed (exit code $EXIT_CODE). Aborting deploy."
+            exit 1
+          fi
+
       # CDK owns the task definition; just force a new deployment so ECS re-pulls :latest.
       - name: Roll the ECS service onto the new image
         run: |

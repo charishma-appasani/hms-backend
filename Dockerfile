@@ -59,6 +59,10 @@ COPY --from=builder /app/package*.json ./
 # The Prisma client is generated outside node_modules (generator output: ../generated/prisma)
 # and is imported at runtime as generated/prisma/client — it must ship in the runtime image.
 COPY --from=builder /app/generated ./generated
+# Prisma schema, migrations, and config — needed so the one-off migration task (a command-override
+# ECS run-task in the deploy pipeline) can run `prisma migrate deploy`. Not used by the app itself.
+COPY --from=builder /app/prisma ./prisma
+COPY --from=builder /app/prisma.config.ts ./
 
 # Create a non-root user
 RUN addgroup -S appgroup && adduser -S appuser -G appgroup
