@@ -18,6 +18,8 @@ import {
   utcToZonedDateOnly,
 } from '../../common/datetime';
 import { slotRowsForTemplate } from '../slots/slot-generation';
+import { assertCanManageProviderSchedule } from '../provider-schedule-access';
+import type { OrgContext } from '../../auth/auth.types';
 import type { AvailabilityTemplate } from '../../../generated/prisma/client';
 import type { CreateAvailabilityTemplateDto } from './dto/availability-template.dto';
 
@@ -100,7 +102,8 @@ export class AvailabilityTemplatesService {
    *   5. Old templates straddling the cutover are truncated to end the day before `startDate`;
    *      templates starting on/after it are removed outright.
    */
-  async create(dto: CreateAvailabilityTemplateDto) {
+  async create(dto: CreateAvailabilityTemplateDto, org: OrgContext) {
+    assertCanManageProviderSchedule(org, dto.providerId);
     const practice = await this.assertProviderAndPractice(
       dto.providerId,
       dto.practiceId,
@@ -268,13 +271,14 @@ export class AvailabilityTemplatesService {
    * remove its empty slots, block any slots that still carry (now-cancelled) bookings — slots can't
    * be deleted while appointments reference them — and soft-delete the template.
    */
-  async remove(id: string) {
+  async remove(id: string, org: OrgContext) {
     const template = await this.scoped.db.availabilityTemplate.findFirst({
       where: { id },
-      select: { id: true },
+      select: { id: true, providerId: true },
     });
     if (!template)
       throw new NotFoundException('Availability template not found');
+    assertCanManageProviderSchedule(org, template.providerId);
 
     const affected = await this.findActiveAppointments(id);
     await this.blockTemplateSlots(id); // stop new bookings during the drop

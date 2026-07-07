@@ -9,8 +9,10 @@ import {
   Post,
   Query,
 } from '@nestjs/common';
+import { CurrentOrg } from '../../auth/current-org.decorator';
 import { Roles } from '../../auth/roles.decorator';
 import { ZodValidationPipe } from '../../common/zod-validation.pipe';
+import type { OrgContext } from '../../auth/auth.types';
 import { ScheduleExceptionsService } from './schedule-exceptions.service';
 import {
   createScheduleExceptionSchema,
@@ -19,7 +21,7 @@ import {
   type ListScheduleExceptionsQueryDto,
 } from './dto/schedule-exception.dto';
 
-/** Any active member may view blocks; only admins create/remove them. */
+/** Any active member may view blocks; admins (any provider) and doctors (own) create/remove them. */
 const ORG_MEMBER = ['admin', 'doctor', 'front_desk', 'nurse'] as const;
 
 @Controller('schedule-exceptions')
@@ -27,12 +29,13 @@ export class ScheduleExceptionsController {
   constructor(private readonly exceptions: ScheduleExceptionsService) {}
 
   @Post()
-  @Roles('admin')
+  @Roles('admin', 'doctor')
   create(
     @Body(new ZodValidationPipe(createScheduleExceptionSchema))
     dto: CreateScheduleExceptionDto,
+    @CurrentOrg() org: OrgContext,
   ) {
-    return this.exceptions.create(dto);
+    return this.exceptions.create(dto, org);
   }
 
   @Get()
@@ -51,9 +54,12 @@ export class ScheduleExceptionsController {
   }
 
   @Delete(':id')
-  @Roles('admin')
+  @Roles('admin', 'doctor')
   @HttpCode(204)
-  remove(@Param('id', ParseUUIDPipe) id: string): Promise<void> {
-    return this.exceptions.remove(id);
+  remove(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentOrg() org: OrgContext,
+  ): Promise<void> {
+    return this.exceptions.remove(id, org);
   }
 }

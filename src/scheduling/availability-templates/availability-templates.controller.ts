@@ -8,15 +8,17 @@ import {
   Post,
   Query,
 } from '@nestjs/common';
+import { CurrentOrg } from '../../auth/current-org.decorator';
 import { Roles } from '../../auth/roles.decorator';
 import { ZodValidationPipe } from '../../common/zod-validation.pipe';
+import type { OrgContext } from '../../auth/auth.types';
 import { AvailabilityTemplatesService } from './availability-templates.service';
 import {
   createAvailabilityTemplateSchema,
   type CreateAvailabilityTemplateDto,
 } from './dto/availability-template.dto';
 
-/** Any active member may read the schedule; only admins create/remove availability. */
+/** Any active member may read the schedule; admins (any provider) and doctors (own) mutate it. */
 const ORG_MEMBER = ['admin', 'doctor', 'front_desk', 'nurse'] as const;
 
 @Controller('availability-templates')
@@ -27,12 +29,13 @@ export class AvailabilityTemplatesController {
   // no edit: this SUPERSEDES their existing schedule at the practice from startDate on — old one
   // ends the day before; compatible bookings kept, the rest relocated (+notify).
   @Post()
-  @Roles('admin')
+  @Roles('admin', 'doctor')
   create(
     @Body(new ZodValidationPipe(createAvailabilityTemplateSchema))
     dto: CreateAvailabilityTemplateDto,
+    @CurrentOrg() org: OrgContext,
   ) {
-    return this.templates.create(dto);
+    return this.templates.create(dto, org);
   }
 
   @Get()
@@ -52,8 +55,8 @@ export class AvailabilityTemplatesController {
 
   // Drop a schedule day: cancels its future bookings (+notify) and removes/blocks its slots.
   @Delete(':id')
-  @Roles('admin')
-  remove(@Param('id', ParseUUIDPipe) id: string) {
-    return this.templates.remove(id);
+  @Roles('admin', 'doctor')
+  remove(@Param('id', ParseUUIDPipe) id: string, @CurrentOrg() org: OrgContext) {
+    return this.templates.remove(id, org);
   }
 }

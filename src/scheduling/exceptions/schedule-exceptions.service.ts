@@ -8,6 +8,8 @@ import {
   RelocationService,
   RELOCATABLE_SELECT,
 } from '../appointments/relocation.service';
+import { assertCanManageProviderSchedule } from '../provider-schedule-access';
+import type { OrgContext } from '../../auth/auth.types';
 import type { ScheduleException } from '../../../generated/prisma/client';
 import type {
   CreateScheduleExceptionDto,
@@ -29,7 +31,8 @@ export class ScheduleExceptionsService {
     private readonly relocation: RelocationService,
   ) {}
 
-  async create(dto: CreateScheduleExceptionDto) {
+  async create(dto: CreateScheduleExceptionDto, org: OrgContext) {
+    assertCanManageProviderSchedule(org, dto.providerId);
     await this.assertProviderAndPractice(dto.providerId, dto.practiceId);
     const startAt = new Date(dto.startAt);
     const endAt = new Date(dto.endAt);
@@ -109,7 +112,7 @@ export class ScheduleExceptionsService {
   }
 
   /** Remove a block and reopen the slots it covered — unless another active block still covers them. */
-  async remove(id: string): Promise<void> {
+  async remove(id: string, org: OrgContext): Promise<void> {
     const orgId = this.scoped.orgId;
     await this.scoped.db.$transaction(async (tx) => {
       const ex = await tx.scheduleException.findFirst({
@@ -123,6 +126,7 @@ export class ScheduleExceptionsService {
         },
       });
       if (!ex) throw new NotFoundException('Schedule exception not found');
+      assertCanManageProviderSchedule(org, ex.providerId);
 
       await tx.scheduleException.update({
         where: { id },

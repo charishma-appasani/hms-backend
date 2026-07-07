@@ -78,9 +78,10 @@ The SPA runs on a sibling origin (`api.` + UI host), so [`main.ts`](../../src/ma
 ### `GET /auth/me`
 
 [`auth.service.ts`](../../src/auth/auth.service.ts) — the session-bootstrap endpoint. Returns the
-user, **every org membership with its roles** (drives the client's org/practice picker + UI RBAC),
-whether they have a patient profile, and any platform role. This is the authoritative source of
-roles for the client.
+user, **every org membership with its roles and `staffId`** (drives the client's org/practice picker
++ UI RBAC; `staffId` is the member's staff row id — the provider id a doctor's own-schedule UI
+uses), whether they have a patient profile, and any platform role. This is the authoritative source
+of roles for the client.
 
 ## 2. Org context — `OrgContextGuard`
 

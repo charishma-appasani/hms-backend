@@ -20,6 +20,8 @@ export interface MeResponse {
   memberships: Array<{
     orgId: string;
     orgName: string;
+    /** The caller's staff row id at this org — scheduling's provider id when they are a doctor. */
+    staffId: string;
     roles: string[];
     status: string;
   }>;
@@ -56,6 +58,7 @@ export class AuthService {
       memberships: memberships.map((m) => ({
         orgId: m.org.id,
         orgName: m.org.name,
+        staffId: m.id,
         roles: m.roles,
         status: m.status,
       })),

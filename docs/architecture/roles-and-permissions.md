@@ -20,9 +20,16 @@ roles, and the same human can be staff at one org and a patient elsewhere.
 | Check a patient in (create visit) | ✅ | — | ✅ | ✅ |
 | Advance visit status (in-consult → completed → …) | ✅ | ✅ | ✅ | ✅ |
 | Record vitals / notes | ✅ | ✅ | — | ✅ |
-| Manage availability templates & blocks (doctor schedules) | ✅ | — | — | — |
+| Manage availability templates & blocks (doctor schedules) | ✅ any provider | ✅ own only | — | — |
 | Manage practices | ✅ | — | — | — |
 | Manage staff (add/edit/remove) | ✅ | — | — | — |
+
+Schedule writes carry a self-scoping check beyond `@Roles`: a `doctor` who is not also `admin` may
+only create/drop availability and blocks where `providerId` is **their own** staff id
+(`assertCanManageProviderSchedule`, `src/scheduling/provider-schedule-access.ts`). The UI matches:
+Staff/Practices pages are admin-only (nav hidden + `roleGuard('admin')`), and the scheduling page
+shows write actions only to admins or to a doctor viewing their own schedule (doctors still READ
+`/staff` and `/practices` — the provider and practice pickers depend on those member-open reads).
 
 Platform: `super_admin` creates/edits/deletes orgs (and can assume-org to onboard a first admin);
 `support` is read-only on orgs.
@@ -31,8 +38,8 @@ Platform: `super_admin` creates/edits/deletes orgs (and can assume-org to onboar
 
 - The "front-desk" set is **not consistent**: `nurse` can register patients and check in, but **cannot
   book appointments** (appointments restrict to `admin`/`front_desk`). Intentional? Probably should align.
-- **Doctors can't manage their own availability** (admin-only). Many clinics want a doctor (or their
-  assistant) to edit their own schedule.
+- ~~Doctors can't manage their own availability~~ — RESOLVED 2026-07-07: doctors manage their **own**
+  schedule (templates + blocks); admins manage any provider's (see the self-scoping note above).
 - **Doctors can't book** their own appointments. Fine if reception always books; revisit for solo docs.
 - All roles are **org-wide** — there is no per-practice or per-doctor scoping yet (see the deferred
   `staff_practice` note in `data-model.md`).
@@ -59,8 +66,8 @@ extending the `UserRole` enum + the guard sets (and, for scoped roles, a doctor/
 1. **Scoping.** `doctor_assistant` (and likely `doctor`) need to be tied to specific doctor(s) — there's
    no staff↔staff (assistant↔doctor) or staff↔practice assignment modelled/enforced yet. Decide the
    scoping model (assistant→doctor link, and/or `staff_practice`) before granting scoped permissions.
-2. **Self-service for doctors.** Should `doctor` manage their own availability and/or book their own
-   appointments? (Drives whether template/appointment guards add `doctor`.)
+2. **Self-service for doctors.** Availability: DECIDED (2026-07-07) — doctors manage their own
+   schedule (built, see above). Booking their own appointments: still open.
 3. **Nurse vs front_desk booking.** Align the two "front-desk" sets, or keep nurses out of booking.
 4. **New roles vs permissions.** Prefer a small set of roles with clear scopes over many fine-grained
    roles. `billing`/`lab_tech` are out of Phase 1 — list only.
