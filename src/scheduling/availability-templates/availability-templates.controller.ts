@@ -23,6 +23,9 @@ const ORG_MEMBER = ['admin', 'doctor', 'front_desk', 'nurse'] as const;
 export class AvailabilityTemplatesController {
   constructor(private readonly templates: AvailabilityTemplatesService) {}
 
+  // Create the provider's weekly schedule (whole week in one call, startDate tomorrow+). There is
+  // no edit: this SUPERSEDES their existing schedule at the practice from startDate on — old one
+  // ends the day before; compatible bookings kept, the rest relocated (+notify).
   @Post()
   @Roles('admin')
   create(
@@ -47,18 +50,7 @@ export class AvailabilityTemplatesController {
     return this.templates.get(id);
   }
 
-  // Changing a live schedule = replace (migrates the old bookings to the new schedule).
-  @Post(':id/replace')
-  @Roles('admin')
-  replace(
-    @Param('id', ParseUUIDPipe) id: string,
-    @Body(new ZodValidationPipe(createAvailabilityTemplateSchema))
-    dto: CreateAvailabilityTemplateDto,
-  ) {
-    return this.templates.replace(id, dto);
-  }
-
-  // Drop a schedule: cancels its future bookings (+notify) and removes/blocks its slots.
+  // Drop a schedule day: cancels its future bookings (+notify) and removes/blocks its slots.
   @Delete(':id')
   @Roles('admin')
   remove(@Param('id', ParseUUIDPipe) id: string) {

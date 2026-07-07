@@ -12,8 +12,10 @@
 > slots) and **slot availability** (`/availability`, a read over generated slots) and
 > **appointment booking** (`/appointments` — atomic no-oversell, walk-ins, cancel) and
 > **visits/check-in** (`/visits` — appt→visit, OP queue, clinical lifecycle), and appointment
-> **reschedule**, **schedule exceptions** (doctor blocks), and **template drop/replace** (cancel /
-> migrate + notify) are built. Remaining: `extra_session` (additive blocks). This is the backend
+> **reschedule**, **schedule exceptions** (doctor blocks), and **template drop** (cancel + notify)
+> are built. There is NO template edit/replace: creating a schedule **supersedes** the provider's
+> existing one from its start date (see the endpoint notes). Remaining: `extra_session`
+> (additive blocks). This is the backend
 > **architecture overview**. The authoritative
 > data model (tables/fields/flows) is [`data-model.md`](./data-model.md); terms are in
 > [`glossary.md`](./glossary.md); the frontend design is in
@@ -156,14 +158,22 @@ GET    /registrations?query=               search within current org (org-scoped
 
 # Staff & availability (a clinician is a staff member with role 'doctor')
 POST   /staff                              invite/add staff (roles, clinician fields)  [built]
-POST   /availability-templates             bounded weekly hours; eager slot gen  [built]
-POST   /availability-templates/:id/replace  supersede schedule; MIGRATE bookings  [built]
-DELETE /availability-templates/:id          DROP schedule; CANCEL bookings + notify  [built]
+POST   /availability-templates             the provider's WEEKLY SCHEDULE at a practice  [built]
+       # Whole week in one atomic call: one template per listed weekday (per-day hours, shared
+       # mode/capacity), `weeks` (1–8) occurrences each from its first occurrence on/after
+       # startDate (tomorrow or later, practice tz). There is NO edit/replace endpoint — creating
+       # a schedule SUPERSEDES the provider's existing schedule at that practice from startDate on:
+       #   1. superseded slots from the cutover are blocked; empty ones deleted (frees their times —
+       #      slots are unique per provider+startAt);
+       #   2. new templates + slots generated (one transaction);
+       #   3. bookings whose exact time/mode survives ADOPT their slot into the new template —
+       #      same slot id, same time, NOT notified (`keptAppointments`);
+       #   4. other future bookings relocate to the nearest open slot (cancel if none) + notify
+       #      (RelocationService, shared with drop and schedule blocks);
+       #   5. straddling old templates get validTo = startDate-1; fully-future ones are removed.
+DELETE /availability-templates/:id          DROP one weekday; CANCEL bookings + notify  [built]
        # drop = cancel future bookings (+notify), delete empty slots, block slots that still carry
        # (now-cancelled) bookings (FK: can't delete a slot an appt references), soft-delete template.
-       # replace (same provider+practice) = generate new schedule, block old slots, migrate old
-       # future bookings to nearest new open slot (cancel if none) + notify, then drop old template.
-       # Both reuse RelocationService (shared with schedule blocks).
 POST   /schedule-exceptions                doctor block → blocks slots + auto-reschedules  [built]
 DELETE /schedule-exceptions/:id             remove block → reopens its slots  [built]
        # Subtractive blocks (time_off/holiday/surgery/busy) flip overlapping OPEN slots → blocked
@@ -183,12 +193,10 @@ DELETE /schedule-exceptions/:id             remove block → reopens its slots  
 #   SMS_DLT_ENTITY_ID + per-template ids). Task role has ses:SendEmail + sns:Publish. Phone is
 #   primary for patients (email optional), so SMS is the main reach.
 GET    /availability?practiceId=&providerId=&date=   slots + computed availability  [built]
-       # Templates are BOUNDED: startDate + weeks (1–8); the recurring weekday is startDate's
-       # weekday. Creating a template EAGERLY materializes all its slots for the range in one
-       # transaction (no cron, no lazy gen). Times are practice-local wall-clock, resolved to UTC
-       # with the practice tz. No PATCH — changing a live schedule is the replace+migrate flow
-       # (planned, post-booking): replace ⇒ auto-move appts to nearest open slot (any day) else
-       # cancel; drop ⇒ cancel all future appts; both notify the patient (email + SMS).
+       # Templates are BOUNDED: `weeks` (1–8) occurrences per weekday. Creating a schedule EAGERLY
+       # materializes all its slots in one transaction (no cron, no lazy gen). Times are
+       # practice-local wall-clock, resolved to UTC with the practice tz. No PATCH and no replace —
+       # changing a live schedule is creating a new one (supersede-from-startDate, see POST above).
 
 # Appointments
 POST   /appointments                       book a scheduled appt (appt bucket)  [built]

@@ -8,36 +8,56 @@ const dateOnly = z
   .regex(/^\d{4}-\d{2}-\d{2}$/, 'Date must be YYYY-MM-DD');
 
 /**
- * A BOUNDED recurring availability template: a provider's weekly hours at a practice, running for
- * `weeks` (1–8) consecutive weeks from `startDate`. The recurring weekday is `startDate`'s weekday
- * (no separate field to drift). Creating it eagerly materializes the slots for the whole range
- * (see AvailabilityTemplatesService). `org_id`/audit are injected by the scoped client; times are
- * practice-local wall-clock. `providerId` must be a doctor at this org; `practiceId` in this org.
+ * A provider's weekly availability at a practice, created as a whole: one entry per working
+ * weekday (per-day hours, shared mode/capacity), running `weeks` (1–8) consecutive weeks.
+ * `startDate` anchors week 1 — each listed weekday recurs from its first occurrence on/after it —
+ * and must be tomorrow or later in the practice's timezone (service-enforced; needs the tz).
  *
- * There is no PATCH: changing a live schedule is the replace-and-migrate flow (separate). For now,
- * delete + recreate (slots regenerate). `code`-style conflicts don't apply.
+ * There is NO edit/replace: creating a schedule SUPERSEDES the provider's existing schedule at
+ * that practice from `startDate` on. The old schedule ends the day before; bookings whose exact
+ * time still exists in the new schedule stay untouched, the rest are relocated to the nearest
+ * open slot (patients notified). See AvailabilityTemplatesService.create.
  */
 export const createAvailabilityTemplateSchema = z
   .object({
     practiceId: z.uuid(),
     providerId: z.uuid(),
-    startDate: dateOnly, // anchors the range; its weekday is the recurring day
+    startDate: dateOnly, // anchors week 1 (any weekday); must be tomorrow+ (practice tz)
     weeks: z.number().int().min(1).max(8),
-    startTime: timeOfDay,
-    endTime: timeOfDay,
     mode: z.enum(['slot', 'token']),
     slotDurationMins: z.number().int().positive().max(1440).optional(),
     apptCapacity: z.number().int().min(0).max(1000).optional(),
     walkinCapacity: z.number().int().min(0).max(1000).optional(),
+    days: z
+      .array(
+        z.object({
+          weekday: z.number().int().min(0).max(6), // 0=Sun .. 6=Sat
+          startTime: timeOfDay,
+          endTime: timeOfDay,
+        }),
+      )
+      .min(1)
+      .max(7),
   })
   .superRefine((v, ctx) => {
-    if (v.endTime <= v.startTime) {
-      ctx.addIssue({
-        code: 'custom',
-        message: 'endTime must be after startTime',
-        path: ['endTime'],
-      });
-    }
+    const seen = new Set<number>();
+    v.days.forEach((d, i) => {
+      if (seen.has(d.weekday)) {
+        ctx.addIssue({
+          code: 'custom',
+          message: 'Each weekday may appear only once',
+          path: ['days', i, 'weekday'],
+        });
+      }
+      seen.add(d.weekday);
+      if (d.endTime <= d.startTime) {
+        ctx.addIssue({
+          code: 'custom',
+          message: 'endTime must be after startTime',
+          path: ['days', i, 'endTime'],
+        });
+      }
+    });
     if (v.mode === 'slot' && v.slotDurationMins == null) {
       ctx.addIssue({
         code: 'custom',
