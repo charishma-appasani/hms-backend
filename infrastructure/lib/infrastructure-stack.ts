@@ -402,7 +402,8 @@ export class InfrastructureStack extends cdk.Stack {
         COGNITO_CLIENT_ID: userPoolClient.userPoolClientId,
         // Patient notifications. Flip to 'true' once a verified SES sender + India DLT are ready;
         // also set NOTIFICATIONS_EMAIL_FROM, SMS_SENDER_ID, SMS_DLT_ENTITY_ID. Until then → stubs.
-        NOTIFICATIONS_ENABLED: 'false',
+        NOTIFICATIONS_ENABLED: 'true',
+        NOTIFICATIONS_EMAIL_FROM: 'no-reply@aayufy.com',
         // Non-secret DB connection details straight from the RDS instance.
         DATABASE_HOST: database.instanceEndpoint.hostname,
         DATABASE_PORT: '5432',
