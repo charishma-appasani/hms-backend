@@ -12,6 +12,7 @@ import { AuthModule } from './auth/auth.module';
 import { OrganizationsModule } from './platform/organizations/organizations.module';
 import { PlatformUsersModule } from './platform/users/platform-users.module';
 import { BootstrapModule } from './platform/bootstrap/bootstrap.module';
+import { OrgSignupModule } from './org-signup/org-signup.module';
 import { PracticesModule } from './practices/practices.module';
 import { StaffModule } from './staff/staff.module';
 import { PatientsModule } from './patients/patients.module';
@@ -34,6 +35,7 @@ import { ScheduleExceptionsModule } from './scheduling/exceptions/schedule-excep
     OtpModule,
     AuthModule,
     BootstrapModule,
+    OrgSignupModule,
     OrganizationsModule,
     PlatformUsersModule,
     PracticesModule,

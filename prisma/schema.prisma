@@ -164,11 +164,13 @@ model Patient {
   @@map("patient")
 }
 
-// Short-lived phone OTP challenge for patient self-signup (global; no org). Code is stored
-// hashed; verified against expiry + an attempt cap. Pruned after use/expiry.
+// Short-lived OTP challenge (global; no org) — patient self-signup, cross-org link consent,
+// org self-signup. `identifier` is the contact being verified (a phone OR an email; it keys the
+// rate limits + verification). Code is stored hashed; verified against expiry + an attempt cap.
+// Pruned after use/expiry.
 model OtpChallenge {
   id         String    @id @default(uuid(7)) @db.Uuid
-  phone      String    @db.VarChar(20)
+  identifier String    @db.VarChar(320)
   codeHash   String    @map("code_hash") @db.VarChar(128)
   purpose    String    @db.VarChar(40) // e.g. 'patient_signup'
   attempts   Int       @default(0)
@@ -177,7 +179,7 @@ model OtpChallenge {
   consumedAt DateTime? @map("consumed_at") @db.Timestamptz
   createdAt  DateTime  @default(now()) @map("created_at") @db.Timestamptz
 
-  @@index([phone, purpose])
+  @@index([identifier, purpose])
   @@index([ip, createdAt])
   @@map("otp_challenge")
 }
@@ -190,9 +192,11 @@ model Organization {
   status     Status    @default(active)
   uhidFormat String    @default("UH{seq:08}") @map("uhid_format") @db.VarChar(64)
   settings   Json      @default("{}")
+  approvedAt DateTime? @map("approved_at") @db.Timestamptz // null = awaiting platform approval; gates public directory visibility + patient self-booking
+  approvedBy String?   @map("approved_by") @db.Uuid // platform operator who approved (operator-created orgs are approved at creation)
   createdAt  DateTime  @default(now()) @map("created_at") @db.Timestamptz
   updatedAt  DateTime  @updatedAt @map("updated_at") @db.Timestamptz
-  createdBy  String?   @map("created_by") @db.Uuid // platform operator who onboarded the org
+  createdBy  String?   @map("created_by") @db.Uuid // platform operator who onboarded the org, or the self-signup founding admin
   updatedBy  String?   @map("updated_by") @db.Uuid
   deletedAt  DateTime? @map("deleted_at") @db.Timestamptz
   deletedBy  String?   @map("deleted_by") @db.Uuid

@@ -60,6 +60,16 @@ immediately (Cognito invite suppressed, permanent password set); without it Cogn
 → `AdminSetUserPassword` permanent). The full operator runbook (bootstrap → org → admin → staff →
 patients, with `curl` examples) is in [`onboarding-and-bootstrap.md`](./onboarding-and-bootstrap.md).
 
+### `POST /org-signup/start` + `/verify` (public org self-signup)
+
+[`org-signup/*`](../../src/org-signup/) — `@Public`, OTP-gated (shared `OtpService` rate limits,
+keyed on the admin's **email** — required, since staff Cognito logins are email-keyed; the code is
+always emailed). `verify` creates the org **unapproved** (`approved_at` null → hidden from the
+patient directory until `POST /platform/organizations/:id/approve`, super_admin) plus its founding
+`staff` admin, reusing an existing `app_user` for the email when one exists (password ignored) or
+provisioning Cognito with the submitted permanent password. Details + curl:
+[`onboarding-and-bootstrap.md`](./onboarding-and-bootstrap.md) Step 1b.
+
 ### `GET /config` (public runtime config for the SPA)
 
 [`config/config.controller.ts`](../../src/config/config.controller.ts) — `@Public`. Returns the
@@ -81,7 +91,8 @@ The SPA runs on a sibling origin (`api.` + UI host), so [`main.ts`](../../src/ma
 user, **every org membership with its roles and `staffId`** (drives the client's org/practice picker
 + UI RBAC; `staffId` is the member's staff row id — the provider id a doctor's own-schedule UI
 uses), whether they have a patient profile, and any platform role. This is the authoritative source
-of roles for the client.
+of roles for the client. Each membership also carries `orgApproved` (false while a self-signed-up
+org awaits platform approval — the org shell shows a banner).
 
 ## 2. Org context — `OrgContextGuard`
 

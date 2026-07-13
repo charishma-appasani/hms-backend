@@ -19,7 +19,11 @@ a structured **clinical note** per visit (vitals, symptoms, diagnosis, prescript
    availability) across the platform, including orgs they have no relationship with. **Patients remain
    non-discoverable** (no patient directory; orgs still reach a patient only via a registration). Directory
    reads require a logged-in patient (gated, cross-org) — not fully anonymous, to limit scraping.
-2. **Self-booking + auto-registration.** A logged-in patient can book at any *active* org/practice/provider.
+   **Approval gate (added 2026-07-12 with org self-signup):** the directory and patient self-booking/
+   reschedule only surface orgs with `organization.approved_at IS NOT NULL` — a self-signed-up org stays
+   invisible (including deep-linked slot ids) until a platform super_admin approves it. See
+   onboarding-and-bootstrap.md Step 1b.
+2. **Self-booking + auto-registration.** A logged-in patient can book at any *active, approved* org/practice/provider.
    On their **first** appointment at an org, a `patient_registration` (with UHID) is **auto-created** — no
    staff action, no OTP. Rationale: the patient is acting for themselves with a verified login, so consent
    is inherent (this differs from the *staff*-initiated cross-org link, which still needs patient OTP).

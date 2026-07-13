@@ -24,6 +24,8 @@ export interface MeResponse {
     staffId: string;
     roles: string[];
     status: string;
+    /** False while a self-signed-up org awaits platform approval (not patient-visible yet). */
+    orgApproved: boolean;
   }>;
   hasPatientProfile: boolean;
 }
@@ -38,7 +40,7 @@ export class AuthService {
     const [memberships, patient] = await Promise.all([
       this.prisma.staff.findMany({
         where: { userId: user.id, deletedAt: null },
-        include: { org: { select: { id: true, name: true } } },
+        include: { org: { select: { id: true, name: true, approvedAt: true } } },
       }),
       this.prisma.patient.findUnique({
         where: { userId: user.id },
@@ -61,6 +63,7 @@ export class AuthService {
         staffId: m.id,
         roles: m.roles,
         status: m.status,
+        orgApproved: m.org.approvedAt !== null,
       })),
       hasPatientProfile: patient !== null,
     };

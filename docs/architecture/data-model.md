@@ -115,8 +115,11 @@ CREATE INDEX patient_abha_idx ON patient (abha_number);
 > the org (app_user + patient + registration/UHID), provisioning a Cognito login by phone/email
 > (duplicate phone/email → 409). (2) **self-signup** — public OTP flow (`POST /patients/signup/start` → SMS code →
 > `/verify` sets a password, creates app_user + patient, NO org registration yet). A short-lived
-> hashed `otp_challenge` row backs the OTP. Linking a *pre-existing* patient to a new org
-> (OTP/consent, §8) is still deferred — staff-create handles brand-new patients.
+> hashed `otp_challenge` row backs the OTP — keyed by a generic `identifier` varchar(320) (a phone
+> OR an email; org self-signup keys on the admin's email, patient flows key on the phone; delivery
+> prefers email whenever one is present). Linking a *pre-existing* patient to a new org
+> (OTP/consent, §8) is built. **Org self-signup** (public `POST /org-signup/*`) also rides this
+> table — see onboarding-and-bootstrap.md Step 1b.
 
 ## 5. Tenant layer (every table has `org_id`)
 
@@ -141,6 +144,9 @@ CREATE TABLE organization (
   status      status NOT NULL DEFAULT 'active',
   uhid_format varchar(64) NOT NULL DEFAULT 'UH{seq:08}',   -- per-org UHID template
   settings    jsonb NOT NULL DEFAULT '{}',
+  approved_at timestamptz,                 -- NULL = self-signup awaiting platform approval:
+  approved_by uuid,                        --   hidden from the patient directory + self-booking;
+                                           --   operator-created orgs are approved at creation
   created_at  timestamptz NOT NULL DEFAULT now(),
   updated_at  timestamptz NOT NULL DEFAULT now()
 );

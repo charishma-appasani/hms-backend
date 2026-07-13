@@ -281,6 +281,7 @@ export class PatientsService {
     ip: string,
   ): Promise<{ sent: boolean }> {
     await this.otp.request({
+      identifier: dto.phone,
       phone: dto.phone,
       email: dto.email,
       purpose: SIGNUP_PURPOSE,
@@ -292,7 +293,7 @@ export class PatientsService {
   /** Step 2: verify the OTP, then create the patient identity + profile (no org registration yet). */
   async signupVerify(dto: SignupVerifyDto) {
     await this.otp.verify({
-      phone: dto.phone,
+      identifier: dto.phone,
       purpose: SIGNUP_PURPOSE,
       code: dto.code,
     });
@@ -379,6 +380,7 @@ export class PatientsService {
       );
     }
     await this.otp.request({
+      identifier: dto.phone,
       phone: dto.phone,
       email: patient.user.email ?? undefined,
       name: patient.user.firstName,
@@ -396,7 +398,7 @@ export class PatientsService {
   async linkVerify(dto: LinkVerifyDto) {
     const orgId = this.scoped.orgId;
     await this.otp.verify({
-      phone: dto.phone,
+      identifier: dto.phone,
       purpose: LINK_PURPOSE,
       code: dto.code,
     });

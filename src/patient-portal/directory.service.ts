@@ -12,12 +12,13 @@ import { dayWindowUtc } from '../common/datetime';
 export class DirectoryService {
   constructor(private readonly prisma: PrismaService) {}
 
-  /** Active orgs, optionally filtered by name. */
+  /** Active, platform-APPROVED orgs, optionally filtered by name. */
   async orgs(q?: string) {
     const rows = await this.prisma.organization.findMany({
       where: {
         deletedAt: null,
         status: 'active',
+        approvedAt: { not: null }, // self-signed-up orgs are hidden until approved
         ...(q ? { name: { contains: q, mode: 'insensitive' } } : {}),
       },
       select: { id: true, name: true },
@@ -30,7 +31,12 @@ export class DirectoryService {
   /** One org with its active practices + doctors (for the patient to pick a branch + provider). */
   async org(orgId: string) {
     const org = await this.prisma.organization.findFirst({
-      where: { id: orgId, deletedAt: null, status: 'active' },
+      where: {
+        id: orgId,
+        deletedAt: null,
+        status: 'active',
+        approvedAt: { not: null },
+      },
       select: { id: true, name: true },
     });
     if (!org) throw new NotFoundException('Organization not found');
@@ -79,7 +85,12 @@ export class DirectoryService {
   /** A provider's bookable (open, appt-bucket has room) slots at a practice on a date. */
   async availability(input: { practiceId: string; providerId: string; date: string }) {
     const practice = await this.prisma.practice.findFirst({
-      where: { id: input.practiceId, deletedAt: null, status: 'active' },
+      where: {
+        id: input.practiceId,
+        deletedAt: null,
+        status: 'active',
+        org: { approvedAt: { not: null } }, // no availability peeking at unapproved orgs
+      },
       select: { id: true, timezone: true, org: { select: { id: true } } },
     });
     if (!practice) throw new NotFoundException('Practice not found');

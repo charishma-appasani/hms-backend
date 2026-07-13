@@ -54,10 +54,14 @@ export class PatientBookingService {
         mode: true,
         startAt: true,
         practice: { select: { timezone: true } },
-        org: { select: { uhidFormat: true } },
+        org: { select: { uhidFormat: true, approvedAt: true } },
       },
     });
     if (!slot) throw new NotFoundException('Slot not found');
+    // Unapproved orgs are invisible in the directory — also block deep-linked bookings.
+    if (!slot.org.approvedAt) {
+      throw new NotFoundException('Slot not found');
+    }
 
     const sessionDate = utcToZonedDateOnly(slot.startAt, slot.practice.timezone);
 
@@ -159,10 +163,11 @@ export class PatientBookingService {
       select: {
         id: true, orgId: true, practiceId: true, providerId: true, mode: true,
         startAt: true, practice: { select: { timezone: true } },
-        org: { select: { uhidFormat: true } },
+        org: { select: { uhidFormat: true, approvedAt: true } },
       },
     });
     if (!newSlot) throw new NotFoundException('Slot not found');
+    if (!newSlot.org.approvedAt) throw new NotFoundException('Slot not found');
     const sessionDate = utcToZonedDateOnly(newSlot.startAt, newSlot.practice.timezone);
 
     const created = await this.prisma.$transaction(async (tx) => {

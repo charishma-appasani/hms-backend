@@ -11,26 +11,28 @@ import { NotificationService } from '../notifications/notification.service';
 const TTL_MS = 10 * 60 * 1000;
 const MAX_ATTEMPTS = 5;
 // Rate limits — all enforced from the DB (otp_challenge), so they hold across instances.
-const RESEND_COOLDOWN_MS = 60 * 1000; // min gap between codes to the same phone+purpose
-const PHONE_WINDOW_MS = 60 * 60 * 1000;
-const MAX_PER_PHONE = 5; // per phone+purpose per hour
+const RESEND_COOLDOWN_MS = 60 * 1000; // min gap between codes to the same identifier+purpose
+const IDENTIFIER_WINDOW_MS = 60 * 60 * 1000;
+const MAX_PER_IDENTIFIER = 5; // per identifier+purpose per hour
 const IP_WINDOW_MS = 10 * 60 * 1000;
-const MAX_PER_IP = 10; // per IP per 10 min (across phones → anti-enumeration)
+const MAX_PER_IP = 10; // per IP per 10 min (across identifiers → anti-enumeration)
 
 export interface OtpRequest {
-  phone: string;
+  /** The contact being verified (a phone OR an email) — keys the limits + verification. */
+  identifier: string;
   purpose: string; // e.g. 'patient_signup' — scopes limits + verification
   ip?: string; // request IP for per-IP limiting (omit if unknown)
-  email?: string; // if present, the code is delivered by EMAIL instead of SMS
+  email?: string; // delivery contact — EMAIL takes precedence when present
+  phone?: string; // delivery fallback — SMS when there is no email
   name?: string; // greeting in the message (defaults to a neutral salutation)
 }
 
 /**
- * Generic phone-OTP capability, reusable by any module (patient self-signup today; cross-org
- * patient link / consent later). `request` is the ONLY way to issue a code and it always runs the
- * rate-limit checks first, so an OTP can't be sent without passing them. All limits and the
- * challenge live in `otp_challenge`, so they're consistent across instances. Codes are stored
- * hashed and are single-use (consumed on successful `verify`).
+ * Generic OTP capability, reusable by any module (patient self-signup, cross-org patient link,
+ * org self-signup). `request` is the ONLY way to issue a code and it always runs the rate-limit
+ * checks first, so an OTP can't be sent without passing them. All limits and the challenge live
+ * in `otp_challenge`, so they're consistent across instances. Codes are stored hashed and are
+ * single-use (consumed on successful `verify`).
  */
 @Injectable()
 export class OtpService {
@@ -41,24 +43,32 @@ export class OtpService {
 
   /**
    * Rate-limit → generate → store → deliver. Throws 429 if a limit is hit (no code is sent).
-   * Delivery channel: EMAIL when an email is given (cheaper/no DLT, so preferred when both exist),
-   * otherwise SMS to the phone. The challenge is always keyed by phone (the limits + verification).
+   * Delivery channel: EMAIL when an email is given (cheaper/no DLT, so it takes precedence),
+   * otherwise SMS to the phone. The challenge is always keyed by `identifier` (the limits +
+   * verification), which may itself be the email or the phone.
    */
-  async request({ phone, purpose, ip, email, name }: OtpRequest): Promise<void> {
-    await this.enforceLimits(phone, purpose, ip);
+  async request({
+    identifier,
+    purpose,
+    ip,
+    email,
+    phone,
+    name,
+  }: OtpRequest): Promise<void> {
+    await this.enforceLimits(identifier, purpose, ip);
 
     const code = String(randomInt(0, 1_000_000)).padStart(6, '0');
-    // Invalidate any outstanding code for this phone+purpose, then store the new one (hashed).
+    // Invalidate any outstanding code for this identifier+purpose, then store the new one (hashed).
     await this.prisma.otpChallenge.updateMany({
-      where: { phone, purpose, consumedAt: null },
+      where: { identifier, purpose, consumedAt: null },
       data: { consumedAt: new Date() },
     });
     await this.prisma.otpChallenge.create({
       data: {
-        phone,
+        identifier,
         purpose,
         ip,
-        codeHash: hashCode(phone, code),
+        codeHash: hashCode(identifier, code),
         expiresAt: new Date(Date.now() + TTL_MS),
       },
     });
@@ -69,23 +79,28 @@ export class OtpService {
       ? { name: name ?? 'there', email }
       : { name: name ?? 'there', phone };
     await this.notifications.dispatch(recipient, {
-      subject: 'Polaris verification code',
-      body: `Your Polaris verification code is ${code}. It expires in 10 minutes.`,
+      subject: 'Aayufy verification code',
+      body: `Your Aayufy verification code is ${code}. It expires in 10 minutes.`,
     });
   }
 
   /** Validate a code; consumes it on success (single-use). Throws 400 on invalid/expired/exhausted. */
   async verify({
-    phone,
+    identifier,
     purpose,
     code,
   }: {
-    phone: string;
+    identifier: string;
     purpose: string;
     code: string;
   }): Promise<void> {
     const challenge = await this.prisma.otpChallenge.findFirst({
-      where: { phone, purpose, consumedAt: null, expiresAt: { gt: new Date() } },
+      where: {
+        identifier,
+        purpose,
+        consumedAt: null,
+        expiresAt: { gt: new Date() },
+      },
       orderBy: { createdAt: 'desc' },
     });
     if (!challenge) {
@@ -98,7 +113,7 @@ export class OtpService {
         'Too many attempts — please request a new code',
       );
     }
-    if (challenge.codeHash !== hashCode(phone, code)) {
+    if (challenge.codeHash !== hashCode(identifier, code)) {
       await this.prisma.otpChallenge.update({
         where: { id: challenge.id },
         data: { attempts: { increment: 1 } },
@@ -112,13 +127,13 @@ export class OtpService {
   }
 
   private async enforceLimits(
-    phone: string,
+    identifier: string,
     purpose: string,
     ip: string | undefined,
   ): Promise<void> {
     const recent = await this.prisma.otpChallenge.findFirst({
       where: {
-        phone,
+        identifier,
         purpose,
         createdAt: { gt: new Date(Date.now() - RESEND_COOLDOWN_MS) },
       },
@@ -128,16 +143,16 @@ export class OtpService {
       throw tooMany('Please wait a minute before requesting another code');
     }
 
-    const phoneCount = await this.prisma.otpChallenge.count({
+    const identifierCount = await this.prisma.otpChallenge.count({
       where: {
-        phone,
+        identifier,
         purpose,
-        createdAt: { gt: new Date(Date.now() - PHONE_WINDOW_MS) },
+        createdAt: { gt: new Date(Date.now() - IDENTIFIER_WINDOW_MS) },
       },
     });
-    if (phoneCount >= MAX_PER_PHONE) {
+    if (identifierCount >= MAX_PER_IDENTIFIER) {
       throw tooMany(
-        'Too many code requests for this number — please try again later',
+        'Too many code requests for this contact — please try again later',
       );
     }
 
@@ -158,6 +173,6 @@ function tooMany(message: string): HttpException {
   return new HttpException(message, HttpStatus.TOO_MANY_REQUESTS);
 }
 
-function hashCode(phone: string, code: string): string {
-  return createHash('sha256').update(`${phone}:${code}`).digest('hex');
+function hashCode(identifier: string, code: string): string {
+  return createHash('sha256').update(`${identifier}:${code}`).digest('hex');
 }

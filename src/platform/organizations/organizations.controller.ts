@@ -51,6 +51,16 @@ export class OrganizationsController {
     return this.organizations.get(id);
   }
 
+  /** Approve a self-signed-up org (idempotent) → visible to patients + bookable. */
+  @Post(':id/approve')
+  @PlatformRoles('super_admin')
+  approve(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() auth: AuthenticatedUser,
+  ) {
+    return this.organizations.approve(id, auth.user.id);
+  }
+
   @Patch(':id')
   @PlatformRoles('super_admin')
   update(

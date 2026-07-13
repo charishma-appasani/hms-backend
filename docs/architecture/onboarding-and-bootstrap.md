@@ -9,7 +9,7 @@ How users come to exist in Polaris, from a brand-new instance to a fully populat
 | Actor | Stored as | Created by |
 | --- | --- | --- |
 | **Platform operator** (`super_admin` / `support`) | `app_user.platform_role` | Bootstrap (first one) → then `super_admin` via `POST /platform/users` (Cognito invite; reuses an existing app_user's identity). `DELETE /platform/users/:id` revokes the role (not self) |
-| **Organization** (tenant) | `organization` | `super_admin` via `POST /platform/organizations` |
+| **Organization** (tenant) | `organization` | `super_admin` via `POST /platform/organizations` (approved at creation), **or public OTP self-signup** via `POST /org-signup/*` (awaits approval — see Step 1b) |
 | **Staff** (admin / doctor / nurse / front_desk) | `staff` membership + global `app_user` | `POST /staff` (org admin, or super_admin assuming the org) |
 | **Patient** | `patient` + global `app_user` (+ per-org `patient_registration`) | `POST /patients` (staff), public OTP self-signup, or OTP cross-org link |
 
@@ -77,6 +77,51 @@ curl -sS -X POST https://api.aayufy.com/staff \
   -d '{ "email": "admin@apollo.example", "firstName": "Asha", "roles": ["admin"] }'
 ```
 
+## Step 1b — Org self-signup (public, OTP + platform approval)
+
+Organizations can also register **themselves** — no operator involved — at `/auth/signup/org`
+(public `POST /org-signup/start` + `/org-signup/verify`):
+
+1. **start** `{ email, phone? }` → a 6-digit OTP is emailed (email is **required**: it becomes the
+   founding admin's Cognito login, and per the OTP channel rule email takes precedence over SMS
+   whenever it is present). Rate limits are the shared `OtpService` ones (per-identifier cooldown +
+   hourly cap, per-IP cap), keyed on the **email** (`otp_challenge.identifier`).
+2. **verify** `{ email, code, orgName, legalName?, firstName, lastName?, phone?, password }` → in one
+   go: resolve the admin identity (an **existing** `app_user` with this email is reused and the
+   submitted password ignored — e.g. a doctor elsewhere opening their own clinic; otherwise a Cognito
+   user is provisioned with the permanent password — the OTP already proved email control, so no
+   invite email), then one transaction creates the `organization` + the founding `staff` row
+   (`roles=['admin']`, active). Audited as `org.signup`; every `super_admin` gets a best-effort
+   email that a signup is awaiting review.
+
+**Approval gate.** A self-signed-up org has `organization.approved_at = NULL`. It is fully
+**operable from the inside** — the admin signs in immediately and can add practices, staff,
+schedules, walk-in patients — but it is **invisible to patients**: the public directory
+(`/directory/*`) and patient self-booking/reschedule all filter on `approved_at IS NOT NULL`
+(deep-linked slot ids are rejected too). The org shell shows an "awaiting approval" banner
+(`/auth/me` memberships carry `orgApproved`).
+
+A `super_admin` approves from the platform org list (Pending badge → Approve) via
+**`POST /platform/organizations/:id/approve`** (idempotent; sets `approved_at`/`approved_by`,
+audited as `org.approve`, best-effort notification to the org's admins). Rejecting = the existing
+soft-delete (`DELETE /platform/organizations/:id`). Operator-created orgs are auto-approved at
+creation.
+
+```bash
+curl -sS -X POST https://api.aayufy.com/org-signup/start \
+  -H 'Content-Type: application/json' \
+  -d '{ "email": "owner@clinic.example" }'
+
+curl -sS -X POST https://api.aayufy.com/org-signup/verify \
+  -H 'Content-Type: application/json' \
+  -d '{ "email": "owner@clinic.example", "code": "123456", "orgName": "Sunrise Clinic",
+        "firstName": "Asha", "password": "Str0ng-Pass!" }'
+
+# later, as super_admin:
+curl -sS -X POST https://api.aayufy.com/platform/organizations/<orgId>/approve \
+  -H "Authorization: Bearer $TOKEN"
+```
+
 ## Step 2 — The org admin populates the org
 
 The invited admin signs in (sets their password on first login), lands in the **org workspace**
@@ -103,6 +148,8 @@ The invited admin signs in (sets their password on first login), lands in the **
 POST /platform/bootstrap         → first super_admin (empty-DB only)
    ↓ sign in
 /platform → New organization     → org + first admin (assume-org → POST /staff, emailed invite)
+  (or: public /auth/signup/org   → org + founding admin, awaiting approval
+       → super_admin approves    → patient-visible)
    ↓ admin signs in (sets password)
 /organization/staff              → add doctors / nurses / front-desk
 /organization/patients           → register / link patients
