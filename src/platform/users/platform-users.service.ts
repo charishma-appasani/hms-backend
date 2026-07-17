@@ -52,9 +52,7 @@ export class PlatformUsersService {
       select: { id: true, platformRole: true },
     });
     if (existing?.platformRole) {
-      throw new ConflictException(
-        'This person is already a platform operator',
-      );
+      throw new ConflictException('This person is already a platform operator');
     }
 
     if (existing) {

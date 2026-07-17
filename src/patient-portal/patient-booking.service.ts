@@ -22,7 +22,10 @@ const RESCHEDULABLE: AppointmentStatus[] = ['requested', 'confirmed'];
 const APPT_VIEW = {
   practice: { select: { name: true, org: { select: { name: true } } } },
   provider: {
-    select: { specialty: true, user: { select: { firstName: true, lastName: true } } },
+    select: {
+      specialty: true,
+      user: { select: { firstName: true, lastName: true } },
+    },
   },
   patient: {
     select: { user: { select: { firstName: true, phone: true, email: true } } },
@@ -63,16 +66,26 @@ export class PatientBookingService {
       throw new NotFoundException('Slot not found');
     }
 
-    const sessionDate = utcToZonedDateOnly(slot.startAt, slot.practice.timezone);
+    const sessionDate = utcToZonedDateOnly(
+      slot.startAt,
+      slot.practice.timezone,
+    );
 
     const appointment = await this.prisma.$transaction(async (tx) => {
       // 1. Secure the seat (hard-capped appt bucket) — fails if full/blocked.
       const reserved = await reserveSeat(tx, slot.id, slot.orgId, 'appt');
       if (!reserved) {
-        throw new ConflictException('Slot is no longer available (full or blocked)');
+        throw new ConflictException(
+          'Slot is no longer available (full or blocked)',
+        );
       }
       // 2. Auto-register at this org on first booking.
-      await this.ensureRegistration(tx, slot.orgId, patientId, slot.org.uhidFormat);
+      await this.ensureRegistration(
+        tx,
+        slot.orgId,
+        patientId,
+        slot.org.uhidFormat,
+      );
       // 3. Create the appointment (one shared queue token).
       const tokenNumber = reserved.apptBooked + reserved.walkinBooked;
       return tx.appointment.create({
@@ -100,14 +113,22 @@ export class PatientBookingService {
       entityId: appointment.id,
       patientId,
       orgId: slot.orgId,
-      metadata: { slotId: slot.id, tokenNumber: appointment.tokenNumber, channel: 'patient_app', via: 'patient' },
+      metadata: {
+        slotId: slot.id,
+        tokenNumber: appointment.tokenNumber,
+        channel: 'patient_app',
+        via: 'patient',
+      },
     });
     const response = toResponse(appointment);
     await this.notifications.notify(recipientOf(appointment), {
       kind: 'appointment_booked',
       orgName: response.orgName,
       providerName: response.providerName,
-      appointment: { sessionDate: response.sessionDate, tokenNumber: response.tokenNumber },
+      appointment: {
+        sessionDate: response.sessionDate,
+        tokenNumber: response.tokenNumber,
+      },
     });
     return response;
   }
@@ -116,13 +137,26 @@ export class PatientBookingService {
     const appointment = await this.prisma.$transaction(async (tx) => {
       const appt = await tx.appointment.findFirst({
         where: { id: appointmentId, patientId },
-        select: { id: true, slotId: true, orgId: true, channel: true, status: true },
+        select: {
+          id: true,
+          slotId: true,
+          orgId: true,
+          channel: true,
+          status: true,
+        },
       });
       if (!appt) throw new NotFoundException('Appointment not found');
       if (!CANCELLABLE.includes(appt.status)) {
-        throw new ConflictException(`Cannot cancel an appointment in status '${appt.status}'`);
+        throw new ConflictException(
+          `Cannot cancel an appointment in status '${appt.status}'`,
+        );
       }
-      await releaseSeat(tx, appt.slotId, appt.orgId, appt.channel === 'walk_in' ? 'walkin' : 'appt');
+      await releaseSeat(
+        tx,
+        appt.slotId,
+        appt.orgId,
+        appt.channel === 'walk_in' ? 'walkin' : 'appt',
+      );
       return tx.appointment.update({
         where: { id: appointmentId },
         data: { status: 'cancelled' },
@@ -140,19 +174,36 @@ export class PatientBookingService {
     const response = toResponse(appointment);
     await this.notifications.notify(recipientOf(appointment), {
       kind: 'appointment_cancelled',
-      appointment: { sessionDate: response.sessionDate, tokenNumber: response.tokenNumber },
+      appointment: {
+        sessionDate: response.sessionDate,
+        tokenNumber: response.tokenNumber,
+      },
     });
     return response;
   }
 
-  async reschedule(patientId: string, appointmentId: string, newSlotId: string) {
+  async reschedule(
+    patientId: string,
+    appointmentId: string,
+    newSlotId: string,
+  ) {
     const old = await this.prisma.appointment.findFirst({
       where: { id: appointmentId, patientId },
-      select: { id: true, slotId: true, orgId: true, channel: true, status: true, apptType: true, reason: true },
+      select: {
+        id: true,
+        slotId: true,
+        orgId: true,
+        channel: true,
+        status: true,
+        apptType: true,
+        reason: true,
+      },
     });
     if (!old) throw new NotFoundException('Appointment not found');
     if (!RESCHEDULABLE.includes(old.status)) {
-      throw new ConflictException(`Cannot reschedule an appointment in status '${old.status}'`);
+      throw new ConflictException(
+        `Cannot reschedule an appointment in status '${old.status}'`,
+      );
     }
     if (newSlotId === old.slotId) {
       throw new ConflictException('New slot is the same as the current slot');
@@ -161,25 +212,48 @@ export class PatientBookingService {
     const newSlot = await this.prisma.slot.findFirst({
       where: { id: newSlotId },
       select: {
-        id: true, orgId: true, practiceId: true, providerId: true, mode: true,
-        startAt: true, practice: { select: { timezone: true } },
+        id: true,
+        orgId: true,
+        practiceId: true,
+        providerId: true,
+        mode: true,
+        startAt: true,
+        practice: { select: { timezone: true } },
         org: { select: { uhidFormat: true, approvedAt: true } },
       },
     });
     if (!newSlot) throw new NotFoundException('Slot not found');
     if (!newSlot.org.approvedAt) throw new NotFoundException('Slot not found');
-    const sessionDate = utcToZonedDateOnly(newSlot.startAt, newSlot.practice.timezone);
+    const sessionDate = utcToZonedDateOnly(
+      newSlot.startAt,
+      newSlot.practice.timezone,
+    );
 
     const created = await this.prisma.$transaction(async (tx) => {
       const reserved = await reserveSeat(tx, newSlot.id, newSlot.orgId, 'appt');
       if (!reserved) {
-        throw new ConflictException('The new slot is no longer available (full or blocked)');
+        throw new ConflictException(
+          'The new slot is no longer available (full or blocked)',
+        );
       }
       // Reschedule may cross orgs (different clinic) → ensure a registration at the target org.
-      await this.ensureRegistration(tx, newSlot.orgId, patientId, newSlot.org.uhidFormat);
+      await this.ensureRegistration(
+        tx,
+        newSlot.orgId,
+        patientId,
+        newSlot.org.uhidFormat,
+      );
       const tokenNumber = reserved.apptBooked + reserved.walkinBooked;
-      await releaseSeat(tx, old.slotId, old.orgId, old.channel === 'walk_in' ? 'walkin' : 'appt');
-      await tx.appointment.update({ where: { id: old.id }, data: { status: 'rescheduled' } });
+      await releaseSeat(
+        tx,
+        old.slotId,
+        old.orgId,
+        old.channel === 'walk_in' ? 'walkin' : 'appt',
+      );
+      await tx.appointment.update({
+        where: { id: old.id },
+        data: { status: 'rescheduled' },
+      });
       return tx.appointment.create({
         data: {
           orgId: newSlot.orgId,
@@ -205,7 +279,11 @@ export class PatientBookingService {
       entityId: created.id,
       patientId,
       orgId: newSlot.orgId,
-      metadata: { fromAppointmentId: old.id, toSlotId: newSlot.id, via: 'patient' },
+      metadata: {
+        fromAppointmentId: old.id,
+        toSlotId: newSlot.id,
+        via: 'patient',
+      },
     });
     return toResponse(created);
   }
@@ -222,7 +300,12 @@ export class PatientBookingService {
       select: { id: true },
     });
     if (existing) return;
-    const seq = await nextSequence(tx, { orgId, scope: 'org', scopeId: orgId, name: 'uhid' });
+    const seq = await nextSequence(tx, {
+      orgId,
+      scope: 'org',
+      scopeId: orgId,
+      name: 'uhid',
+    });
     await tx.patientRegistration.create({
       data: {
         orgId,
@@ -241,8 +324,13 @@ type AppointmentView = {
   status: AppointmentStatus;
   channel: string;
   practice: { name: string; org: { name: string } };
-  provider: { specialty: string | null; user: { firstName: string; lastName: string | null } };
-  patient: { user: { firstName: string; phone: string | null; email: string | null } };
+  provider: {
+    specialty: string | null;
+    user: { firstName: string; lastName: string | null };
+  };
+  patient: {
+    user: { firstName: string; phone: string | null; email: string | null };
+  };
 };
 
 function recipientOf(a: AppointmentView) {
@@ -258,7 +346,8 @@ function toResponse(a: AppointmentView) {
     id: a.id,
     orgName: a.practice.org.name,
     practiceName: a.practice.name,
-    providerName: `${a.provider.user.firstName} ${a.provider.user.lastName ?? ''}`.trim(),
+    providerName:
+      `${a.provider.user.firstName} ${a.provider.user.lastName ?? ''}`.trim(),
     sessionDate: formatDateOnly(a.sessionDate),
     tokenNumber: a.tokenNumber,
     status: a.status,

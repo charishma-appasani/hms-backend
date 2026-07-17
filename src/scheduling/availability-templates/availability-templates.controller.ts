@@ -56,7 +56,10 @@ export class AvailabilityTemplatesController {
   // Drop a schedule day: cancels its future bookings (+notify) and removes/blocks its slots.
   @Delete(':id')
   @Roles('admin', 'doctor')
-  remove(@Param('id', ParseUUIDPipe) id: string, @CurrentOrg() org: OrgContext) {
+  remove(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentOrg() org: OrgContext,
+  ) {
     return this.templates.remove(id, org);
   }
 }

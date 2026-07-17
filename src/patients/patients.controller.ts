@@ -74,7 +74,9 @@ export class PatientsController {
   // ── staff-managed (org-scoped) ──
   @Post()
   @Roles(...FRONT_DESK)
-  create(@Body(new ZodValidationPipe(createPatientSchema)) dto: CreatePatientDto) {
+  create(
+    @Body(new ZodValidationPipe(createPatientSchema)) dto: CreatePatientDto,
+  ) {
     return this.patients.createByStaff(dto);
   }
 

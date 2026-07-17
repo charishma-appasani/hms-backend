@@ -29,17 +29,52 @@ export interface TenantModelMeta {
 export const TENANT_MODELS: Record<string, TenantModelMeta> = {
   Practice: { org: true, softDelete: true, createdBy: true, updatedBy: true },
   Staff: { org: true, softDelete: true, createdBy: true, updatedBy: true },
-  StaffPractice: { org: true, softDelete: false, createdBy: false, updatedBy: false },
+  StaffPractice: {
+    org: true,
+    softDelete: false,
+    createdBy: false,
+    updatedBy: false,
+  },
   Consent: { org: true, softDelete: false, createdBy: true, updatedBy: false },
-  PatientRegistration: { org: true, softDelete: true, createdBy: true, updatedBy: true },
-  AvailabilityTemplate: { org: true, softDelete: true, createdBy: true, updatedBy: true },
-  ScheduleException: { org: true, softDelete: true, createdBy: true, updatedBy: true },
+  PatientRegistration: {
+    org: true,
+    softDelete: true,
+    createdBy: true,
+    updatedBy: true,
+  },
+  AvailabilityTemplate: {
+    org: true,
+    softDelete: true,
+    createdBy: true,
+    updatedBy: true,
+  },
+  ScheduleException: {
+    org: true,
+    softDelete: true,
+    createdBy: true,
+    updatedBy: true,
+  },
   Slot: { org: true, softDelete: false, createdBy: false, updatedBy: false },
-  Appointment: { org: true, softDelete: true, createdBy: true, updatedBy: true },
+  Appointment: {
+    org: true,
+    softDelete: true,
+    createdBy: true,
+    updatedBy: true,
+  },
   Visit: { org: true, softDelete: true, createdBy: true, updatedBy: true },
   // Clinical record children of a visit — hard-deletable lines (no soft delete). Prescriptions are
   // write-once (createdBy only); test orders get a status/result updated later (updatedBy too).
-  Prescription: { org: true, softDelete: false, createdBy: true, updatedBy: false },
+  Prescription: {
+    org: true,
+    softDelete: false,
+    createdBy: true,
+    updatedBy: false,
+  },
   TestOrder: { org: true, softDelete: false, createdBy: true, updatedBy: true },
-  NumberSequence: { org: true, softDelete: false, createdBy: false, updatedBy: false },
+  NumberSequence: {
+    org: true,
+    softDelete: false,
+    createdBy: false,
+    updatedBy: false,
+  },
 };

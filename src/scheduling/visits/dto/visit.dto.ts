@@ -59,7 +59,9 @@ export const createTestOrderSchema = z.object({
 /** Update a test order's lifecycle status and/or its result. */
 export const updateTestOrderSchema = z
   .object({
-    status: z.enum(['ordered', 'collected', 'resulted', 'cancelled']).optional(),
+    status: z
+      .enum(['ordered', 'collected', 'resulted', 'cancelled'])
+      .optional(),
     result: z.string().trim().max(4000).optional(),
   })
   .refine((v) => v.status !== undefined || v.result !== undefined, {

@@ -28,8 +28,7 @@ export class StaffManageGuard implements CanActivate {
 
     const isOrgAdmin = orgContext.roles.includes('admin');
     const isAssumingSuperAdmin =
-      orgContext.assumed &&
-      request.auth.user.platformRole === 'super_admin';
+      orgContext.assumed && request.auth.user.platformRole === 'super_admin';
 
     if (!isOrgAdmin && !isAssumingSuperAdmin) {
       throw new ForbiddenException(

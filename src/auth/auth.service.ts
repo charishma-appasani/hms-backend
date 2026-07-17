@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { formatDateOnly } from '../common/datetime';
 import type { AuthenticatedUser } from './auth.types';
 
 /**
@@ -15,6 +16,9 @@ export interface MeResponse {
     lastName: string | null;
     email: string | null;
     phone: string | null;
+    /** YYYY-MM-DD; the patient-profile activation dialog only asks for what's missing here. */
+    dateOfBirth: string | null;
+    gender: string | null;
     platformRole: string | null;
   };
   memberships: Array<{
@@ -40,7 +44,9 @@ export class AuthService {
     const [memberships, patient] = await Promise.all([
       this.prisma.staff.findMany({
         where: { userId: user.id, deletedAt: null },
-        include: { org: { select: { id: true, name: true, approvedAt: true } } },
+        include: {
+          org: { select: { id: true, name: true, approvedAt: true } },
+        },
       }),
       this.prisma.patient.findUnique({
         where: { userId: user.id },
@@ -55,6 +61,8 @@ export class AuthService {
         lastName: user.lastName,
         email: user.email,
         phone: user.phone,
+        dateOfBirth: user.dateOfBirth ? formatDateOnly(user.dateOfBirth) : null,
+        gender: user.gender,
         platformRole: user.platformRole,
       },
       memberships: memberships.map((m) => ({

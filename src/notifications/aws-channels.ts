@@ -77,7 +77,10 @@ export class SnsSmsChannel implements NotificationChannel {
     message: NotificationMessage,
   ): Promise<void> {
     const attributes: Record<string, MessageAttributeValue> = {
-      'AWS.SNS.SMS.SMSType': { DataType: 'String', StringValue: 'Transactional' },
+      'AWS.SNS.SMS.SMSType': {
+        DataType: 'String',
+        StringValue: 'Transactional',
+      },
     };
     if (this.senderId) {
       attributes['AWS.SNS.SMS.SenderID'] = {

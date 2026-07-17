@@ -62,7 +62,9 @@ export async function writeAuditLog(
 }
 
 /** Extract the request's user-agent header (it may be a string or string[]). */
-export function userAgentOf(request: { headers: Record<string, unknown> }): string | undefined {
+export function userAgentOf(request: {
+  headers: Record<string, unknown>;
+}): string | undefined {
   const ua = request.headers['user-agent'];
   return Array.isArray(ua) ? (ua[0] as string) : (ua as string | undefined);
 }
@@ -106,7 +108,8 @@ export function diffFields(
   const changes: Record<string, { from: unknown; to: unknown }> = {};
   for (const [key, next] of Object.entries(after)) {
     if (next === undefined) continue; // not being set
-    if (before[key] !== next) changes[key] = { from: before[key] ?? null, to: next };
+    if (before[key] !== next)
+      changes[key] = { from: before[key] ?? null, to: next };
   }
   return changes;
 }

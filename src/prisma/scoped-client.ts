@@ -38,7 +38,6 @@ export function buildScopedClient(base: PrismaClient, ctx: ScopeContext) {
   return base.$extends({
     query: {
       $allModels: {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         async $allOperations({ model, operation, args, query }: any) {
           const meta = TENANT_MODELS[model];
           if (!meta) return query(args); // global / platform model — untouched
@@ -103,7 +102,8 @@ function scopeWhere(
   const scoped = { ...(where ?? {}) };
   if (meta.org) scoped.orgId = ctx.orgId;
   // Respect an explicit deletedAt filter (e.g. a restore/admin query that opts in).
-  if (meta.softDelete && scoped.deletedAt === undefined) scoped.deletedAt = null;
+  if (meta.softDelete && scoped.deletedAt === undefined)
+    scoped.deletedAt = null;
   return scoped;
 }
 

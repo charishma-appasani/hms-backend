@@ -88,11 +88,25 @@ The SPA runs on a sibling origin (`api.` + UI host), so [`main.ts`](../../src/ma
 ### `GET /auth/me`
 
 [`auth.service.ts`](../../src/auth/auth.service.ts) — the session-bootstrap endpoint. Returns the
-user, **every org membership with its roles and `staffId`** (drives the client's org/practice picker
-+ UI RBAC; `staffId` is the member's staff row id — the provider id a doctor's own-schedule UI
-uses), whether they have a patient profile, and any platform role. This is the authoritative source
-of roles for the client. Each membership also carries `orgApproved` (false while a self-signed-up
-org awaits platform approval — the org shell shows a banner).
+user (incl. `dateOfBirth`/`gender`, so the patient-profile activation dialog only asks for what's
+missing), **every org membership with its roles and `staffId`** (drives the client's org/practice
+picker + UI RBAC; `staffId` is the member's staff row id — the provider id a doctor's own-schedule
+UI uses), whether they have a patient profile, and any platform role. This is the authoritative
+source of roles for the client. Each membership also carries `orgApproved` (false while a
+self-signed-up org awaits platform approval — the org shell shows a banner).
+
+### `POST /me/patient-profile` (activate a patient profile on an existing account)
+
+[`patient-portal/patient-profile.controller.ts`](../../src/patient-portal/patient-profile.controller.ts) —
+authenticated (JwtAuthGuard only; no org context, no `PatientContextGuard` — that guard requires the
+profile to already exist, so it can't gate the route that creates it). One human = one `app_user`,
+which may hold `staff` memberships AND a 1:1 `patient` profile; this route is how an existing
+staff/doctor/operator becomes a patient. It creates the `patient` row (repeat/concurrent → 409 via
+the unique `patient.user_id`), fills only demographics *missing* on the `app_user` (never
+overwrites), and audits `patient.signup` with `via: 'self-link'`. No Cognito call — the login
+already exists; the public patient signup rejects an in-use phone/email with a 409 that points
+here (sign in → account menu → "Sign up as a patient"). Org registration stays lazy (auto-created
+on first self-booking).
 
 ## 2. Org context — `OrgContextGuard`
 

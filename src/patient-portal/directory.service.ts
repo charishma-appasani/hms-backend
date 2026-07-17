@@ -53,7 +53,12 @@ export class DirectoryService {
         orderBy: { name: 'asc' },
       }),
       this.prisma.staff.findMany({
-        where: { orgId, deletedAt: null, status: 'active', roles: { has: 'doctor' } },
+        where: {
+          orgId,
+          deletedAt: null,
+          status: 'active',
+          roles: { has: 'doctor' },
+        },
         select: {
           id: true,
           specialty: true,
@@ -83,7 +88,11 @@ export class DirectoryService {
   }
 
   /** A provider's bookable (open, appt-bucket has room) slots at a practice on a date. */
-  async availability(input: { practiceId: string; providerId: string; date: string }) {
+  async availability(input: {
+    practiceId: string;
+    providerId: string;
+    date: string;
+  }) {
     const practice = await this.prisma.practice.findFirst({
       where: {
         id: input.practiceId,

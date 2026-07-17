@@ -110,11 +110,15 @@ CREATE INDEX patient_abha_idx ON patient (abha_number);
 > list. Login maps `cognito_sub → app_user`; discovery for *new* patient links is an
 > OTP-gated lookup (§8).
 >
-> **Each person has a UNIQUE phone or email** (their Cognito login) — no shared phones. **Two
-> patient-create paths (built, `/patients`):** (1) **staff create** — registers a NEW patient at
+> **Each person has a UNIQUE phone or email** (their Cognito login) — no shared phones. **Three
+> patient-create paths (built):** (1) **staff create** (`POST /patients`) — registers a NEW patient at
 > the org (app_user + patient + registration/UHID), provisioning a Cognito login by phone/email
 > (duplicate phone/email → 409). (2) **self-signup** — public OTP flow (`POST /patients/signup/start` → SMS code →
-> `/verify` sets a password, creates app_user + patient, NO org registration yet). A short-lived
+> `/verify` sets a password, creates app_user + patient, NO org registration yet; a phone/email that
+> already has an account → 409 pointing at path 3). (3) **profile activation on an EXISTING account**
+> (`POST /me/patient-profile`, authenticated) — a staff/doctor/operator adds the 1:1 `patient` row to
+> their own `app_user` (same Cognito login, no OTP/password; org registration stays lazy via
+> first booking). A short-lived
 > hashed `otp_challenge` row backs the OTP — keyed by a generic `identifier` varchar(320) (a phone
 > OR an email; org self-signup keys on the admin's email, patient flows key on the phone; delivery
 > prefers email whenever one is present). Linking a *pre-existing* patient to a new org

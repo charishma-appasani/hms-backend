@@ -49,9 +49,7 @@ export class VisitsController {
 
   @Get('queue')
   @Roles(...ORG_MEMBER)
-  queue(
-    @Query(new ZodValidationPipe(queueQuerySchema)) query: QueueQueryDto,
-  ) {
+  queue(@Query(new ZodValidationPipe(queueQuerySchema)) query: QueueQueryDto) {
     return this.visits.queue(query);
   }
 
@@ -95,7 +93,8 @@ export class VisitsController {
   @Roles(...CLINICAL)
   addPrescription(
     @Param('id', ParseUUIDPipe) id: string,
-    @Body(new ZodValidationPipe(createPrescriptionSchema)) dto: CreatePrescriptionDto,
+    @Body(new ZodValidationPipe(createPrescriptionSchema))
+    dto: CreatePrescriptionDto,
   ) {
     return this.visits.addPrescription(id, dto);
   }

@@ -15,7 +15,9 @@ export function throwMappedPrismaError(
 ): never {
   if (err instanceof Prisma.PrismaClientKnownRequestError) {
     if (err.code === 'P2002') {
-      throw new ConflictException(messages?.conflict ?? 'Resource already exists');
+      throw new ConflictException(
+        messages?.conflict ?? 'Resource already exists',
+      );
     }
     if (err.code === 'P2025') {
       throw new NotFoundException(messages?.notFound ?? 'Resource not found');

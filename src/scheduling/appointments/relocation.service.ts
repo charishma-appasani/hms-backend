@@ -89,7 +89,10 @@ export class RelocationService {
       };
 
       if (appt.status === 'checked_in') {
-        result.needsAttention.push({ appointmentId: appt.id, reason: appt.status });
+        result.needsAttention.push({
+          appointmentId: appt.id,
+          reason: appt.status,
+        });
         continue;
       }
 

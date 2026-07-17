@@ -4,7 +4,10 @@ import { CognitoService } from '../auth/cognito.service';
 import { OtpService } from '../otp/otp.service';
 import { AuditService } from '../audit/audit.service';
 import { NotificationService } from '../notifications/notification.service';
-import type { OrgSignupStartDto, OrgSignupVerifyDto } from './dto/org-signup.dto';
+import type {
+  OrgSignupStartDto,
+  OrgSignupVerifyDto,
+} from './dto/org-signup.dto';
 
 const SIGNUP_PURPOSE = 'org_signup';
 
@@ -133,7 +136,10 @@ export class OrgSignupService {
   }
 
   /** Best-effort heads-up to every super_admin that a signup is awaiting approval. */
-  private async notifyPlatformOperators(orgId: string, orgName: string): Promise<void> {
+  private async notifyPlatformOperators(
+    orgId: string,
+    orgName: string,
+  ): Promise<void> {
     try {
       const operators = await this.prisma.appUser.findMany({
         where: { platformRole: 'super_admin', email: { not: null } },

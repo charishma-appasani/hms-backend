@@ -310,7 +310,7 @@ export class PatientsService {
     });
     if (existing) {
       throw new ConflictException(
-        'An account already exists for this phone or email — please log in',
+        'An account already exists for this phone or email — sign in, then use the account menu (top right) to sign up as a patient',
       );
     }
 

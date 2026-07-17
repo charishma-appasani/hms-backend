@@ -72,7 +72,14 @@ function tzOffsetMs(instant: Date, timeZone: string): number {
   for (const part of dtf.formatToParts(instant)) {
     if (part.type !== 'literal') p[part.type] = Number(part.value);
   }
-  const asUtc = Date.UTC(p.year, p.month - 1, p.day, p.hour, p.minute, p.second);
+  const asUtc = Date.UTC(
+    p.year,
+    p.month - 1,
+    p.day,
+    p.hour,
+    p.minute,
+    p.second,
+  );
   return asUtc - instant.getTime();
 }
 

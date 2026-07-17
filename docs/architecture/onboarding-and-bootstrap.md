@@ -11,7 +11,7 @@ How users come to exist in Polaris, from a brand-new instance to a fully populat
 | **Platform operator** (`super_admin` / `support`) | `app_user.platform_role` | Bootstrap (first one) → then `super_admin` via `POST /platform/users` (Cognito invite; reuses an existing app_user's identity). `DELETE /platform/users/:id` revokes the role (not self) |
 | **Organization** (tenant) | `organization` | `super_admin` via `POST /platform/organizations` (approved at creation), **or public OTP self-signup** via `POST /org-signup/*` (awaits approval — see Step 1b) |
 | **Staff** (admin / doctor / nurse / front_desk) | `staff` membership + global `app_user` | `POST /staff` (org admin, or super_admin assuming the org) |
-| **Patient** | `patient` + global `app_user` (+ per-org `patient_registration`) | `POST /patients` (staff), public OTP self-signup, or OTP cross-org link |
+| **Patient** | `patient` + global `app_user` (+ per-org `patient_registration`) | `POST /patients` (staff), public OTP self-signup, OTP cross-org link, or `POST /me/patient-profile` (an existing staff/operator account activating a patient profile from the account menu — see phase-2-patient-portal.md) |
 
 Cognito owns credentials for every login; our DB owns roles/authz. There are **no passwords in our DB**.
 

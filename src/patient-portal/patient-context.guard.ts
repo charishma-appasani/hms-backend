@@ -39,7 +39,9 @@ export class PatientContextGuard implements CanActivate {
       select: { id: true },
     });
     if (!patient) {
-      throw new ForbiddenException('No patient profile is linked to this account');
+      throw new ForbiddenException(
+        'No patient profile is linked to this account',
+      );
     }
 
     request.patientContext = { patientId: patient.id, userId };

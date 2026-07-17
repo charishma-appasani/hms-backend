@@ -97,6 +97,29 @@ C's schema). Each part is shippable on its own.
   (firstName / lastName / DOB / gender). **Phone + email are intentionally NOT editable** (read-only in
   the UI, rejected by the DTO) — see the TODO below.
 
+## Follow-up built (2026-07-16) — existing accounts become patients (account menu)
+
+Staff/doctors/operators could NOT use the public patient signup: it creates a brand-new Cognito
+login, and their phone/email already has one (409). The fix keeps **one human = one `app_user`**
+(the identity model already allowed `staff` memberships + a 1:1 `patient` profile) and adds an
+explicit, opt-in activation path — deliberately NOT auto-creating patient rows or org registrations
+at staff provisioning (consent stays explicit; no phantom patients in org directories/UHID
+sequences).
+
+- **Backend:** `POST /me/patient-profile` (`PatientProfileController` — a separate controller from
+  `/me/*` because `PatientContextGuard` can't gate the route that creates the profile; JwtAuthGuard
+  only). Creates the `patient` row (repeat → 409 via unique `patient.user_id`), fills only MISSING
+  `app_user` demographics (DOB/gender), audits `patient.signup` `via: 'self-link'`. No OTP/password —
+  the caller is already authenticated as that identity. `GET /auth/me` now also returns
+  `dateOfBirth`/`gender` so the client knows what to ask for. The public signup's
+  duplicate-contact 409 message now directs to this flow.
+- **Frontend:** shared `AccountMenu` (`shared/account/`) — the top-right avatar in ALL THREE shells
+  (organization / platform / patient) is now a popover menu listing the user's workspaces
+  (org workspace / platform / patient portal — the only cross-shell navigation; sign-in routing
+  lands on one shell), a **"Sign up as a patient"** entry when `hasPatientProfile` is false (opens
+  `ActivatePatientDialog`, which asks only for missing DOB/gender, then refreshes `/auth/me` and
+  navigates to `/patient`), and Sign out (moved out of the shell headers).
+
 ## TODO — change login identity (email/phone)  ⚠️ blocking a feature
 
 Email/phone double as the **Cognito login username**, and there is no flow to change the login identity

@@ -1,7 +1,11 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { AuditService } from '../audit/audit.service';
+import { throwMappedPrismaError } from '../common/prisma-errors';
 import { formatDateOnly, parseDateOnly } from '../common/datetime';
+import type { AppUser, Gender } from '../../generated/prisma/client';
 import type { UpdateProfileDto } from './dto/profile.dto';
+import type { ActivatePatientProfileDto } from './dto/activate-profile.dto';
 
 /** Provider (clinician) summary for patient-facing views. */
 const PROVIDER_SELECT = {
@@ -30,7 +34,52 @@ function providerName(p: {
  */
 @Injectable()
 export class PatientPortalService {
-  constructor(private readonly prisma: PrismaService) {}
+  private readonly logger = new Logger(PatientPortalService.name);
+
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly audit: AuditService,
+  ) {}
+
+  /**
+   * Activate a patient profile on an EXISTING account (staff/doctor/operator becoming a patient).
+   * Creates the 1:1 `patient` row; the dto only fills demographics missing on the app_user — it
+   * never overwrites existing values. Org registration stays lazy (first booking). A concurrent
+   * or repeat call hits the unique `patient.user_id` constraint → 409.
+   */
+  async activatePatientProfile(user: AppUser, dto: ActivatePatientProfileDto) {
+    try {
+      const patient = await this.prisma.$transaction(async (tx) => {
+        const fill: { dateOfBirth?: Date; gender?: Gender } = {};
+        if (!user.dateOfBirth && dto.dateOfBirth) {
+          fill.dateOfBirth = parseDateOnly(dto.dateOfBirth);
+        }
+        if (!user.gender && dto.gender) fill.gender = dto.gender;
+        if (Object.keys(fill).length > 0) {
+          await tx.appUser.update({
+            where: { id: user.id },
+            data: { ...fill, updatedByUser: user.id }, // self-edit attribution (no org context)
+          });
+        }
+        return tx.patient.create({ data: { userId: user.id } });
+      });
+      await this.audit.record({
+        action: 'patient.signup',
+        entityType: 'patient',
+        entityId: patient.id,
+        patientId: patient.id,
+        metadata: { via: 'self-link' }, // existing account, no new Cognito identity
+      });
+      this.logger.log(
+        `Patient profile activated on existing account: patientId=${patient.id} userId=${user.id}`,
+      );
+      return { patientId: patient.id, message: 'Patient profile activated.' };
+    } catch (err) {
+      return throwMappedPrismaError(err, {
+        conflict: 'This account already has a patient profile',
+      });
+    }
+  }
 
   async registrations(patientId: string) {
     const rows = await this.prisma.patientRegistration.findMany({
@@ -107,7 +156,9 @@ export class PatientPortalService {
       data: {
         firstName: dto.firstName,
         lastName: dto.lastName,
-        dateOfBirth: dto.dateOfBirth ? parseDateOnly(dto.dateOfBirth) : undefined,
+        dateOfBirth: dto.dateOfBirth
+          ? parseDateOnly(dto.dateOfBirth)
+          : undefined,
         gender: dto.gender,
         updatedByUser: userId, // self-edit attribution (no org context)
       },
