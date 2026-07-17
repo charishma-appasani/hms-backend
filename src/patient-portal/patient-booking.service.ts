@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ConflictException,
   Injectable,
   NotFoundException,
@@ -15,6 +16,7 @@ import {
 } from '../scheduling/appointments/appointments.service';
 import type { AppointmentStatus, Prisma } from '../../generated/prisma/client';
 import type { SelfBookDto } from './dto/directory.dto';
+import type { PatientContext } from './patient-context.guard';
 
 const CANCELLABLE: AppointmentStatus[] = ['requested', 'confirmed'];
 const RESCHEDULABLE: AppointmentStatus[] = ['requested', 'confirmed'];
@@ -46,7 +48,7 @@ export class PatientBookingService {
     private readonly notifications: NotificationService,
   ) {}
 
-  async book(patientId: string, dto: SelfBookDto) {
+  async book({ patientId, userId }: PatientContext, dto: SelfBookDto) {
     const slot = await this.prisma.slot.findFirst({
       where: { id: dto.slotId },
       select: {
@@ -57,6 +59,7 @@ export class PatientBookingService {
         mode: true,
         startAt: true,
         practice: { select: { timezone: true } },
+        provider: { select: { userId: true } },
         org: { select: { uhidFormat: true, approvedAt: true } },
       },
     });
@@ -64,6 +67,12 @@ export class PatientBookingService {
     // Unapproved orgs are invisible in the directory — also block deep-linked bookings.
     if (!slot.org.approvedAt) {
       throw new NotFoundException('Slot not found');
+    }
+    // Staff can be patients (same app_user), but a self-consultation is meaningless.
+    if (slot.provider.userId === userId) {
+      throw new BadRequestException(
+        'You cannot book an appointment with yourself as the provider',
+      );
     }
 
     const sessionDate = utcToZonedDateOnly(
@@ -183,7 +192,7 @@ export class PatientBookingService {
   }
 
   async reschedule(
-    patientId: string,
+    { patientId, userId }: PatientContext,
     appointmentId: string,
     newSlotId: string,
   ) {
@@ -219,11 +228,17 @@ export class PatientBookingService {
         mode: true,
         startAt: true,
         practice: { select: { timezone: true } },
+        provider: { select: { userId: true } },
         org: { select: { uhidFormat: true, approvedAt: true } },
       },
     });
     if (!newSlot) throw new NotFoundException('Slot not found');
     if (!newSlot.org.approvedAt) throw new NotFoundException('Slot not found');
+    if (newSlot.provider.userId === userId) {
+      throw new BadRequestException(
+        'You cannot book an appointment with yourself as the provider',
+      );
+    }
     const sessionDate = utcToZonedDateOnly(
       newSlot.startAt,
       newSlot.practice.timezone,

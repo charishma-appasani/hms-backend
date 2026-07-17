@@ -63,7 +63,7 @@ export class PatientPortalController {
     @CurrentPatient() patient: PatientContext,
     @Body(new ZodValidationPipe(selfBookSchema)) dto: SelfBookDto,
   ) {
-    return this.booking.book(patient.patientId, dto);
+    return this.booking.book(patient, dto);
   }
 
   @Patch('appointments/:id/cancel')
@@ -80,7 +80,7 @@ export class PatientPortalController {
     @Param('id', ParseUUIDPipe) id: string,
     @Body(new ZodValidationPipe(selfRescheduleSchema)) dto: SelfRescheduleDto,
   ) {
-    return this.booking.reschedule(patient.patientId, id, dto.slotId);
+    return this.booking.reschedule(patient, id, dto.slotId);
   }
 
   @Get('visits')

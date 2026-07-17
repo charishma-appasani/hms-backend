@@ -113,17 +113,24 @@ export class AppointmentsService {
         startAt: true,
         walkinCapacity: true,
         practice: { select: { timezone: true } },
+        provider: { select: { userId: true } },
       },
     });
     if (!slot) throw new NotFoundException('Slot not found');
 
     const registration = await this.scoped.db.patientRegistration.findFirst({
       where: { patientId, status: 'active' },
-      select: { id: true },
+      select: { id: true, patient: { select: { userId: true } } },
     });
     if (!registration) {
       throw new BadRequestException(
         'Patient is not registered at this organization',
+      );
+    }
+    // Staff can be patients (same app_user), but a self-consultation is meaningless.
+    if (registration.patient.userId === slot.provider.userId) {
+      throw new BadRequestException(
+        'The selected provider and patient are the same person',
       );
     }
 
@@ -314,6 +321,7 @@ export class AppointmentsService {
         status: true,
         apptType: true,
         reason: true,
+        patient: { select: { userId: true } },
       },
     });
     if (!old) throw new NotFoundException('Appointment not found');
@@ -346,9 +354,15 @@ export class AppointmentsService {
         mode: true,
         startAt: true,
         practice: { select: { timezone: true } },
+        provider: { select: { userId: true } },
       },
     });
     if (!newSlot) throw new NotFoundException('Slot not found');
+    if (newSlot.provider.userId === old.patient.userId) {
+      throw new BadRequestException(
+        'The selected provider and patient are the same person',
+      );
+    }
     const sessionDate = utcToZonedDateOnly(
       newSlot.startAt,
       newSlot.practice.timezone,

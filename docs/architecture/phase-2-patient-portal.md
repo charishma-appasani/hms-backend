@@ -119,6 +119,14 @@ sequences).
   lands on one shell), a **"Sign up as a patient"** entry when `hasPatientProfile` is false (opens
   `ActivatePatientDialog`, which asks only for missing DOB/gender, then refreshes `/auth/me` and
   navigates to `/patient`), and Sign out (moved out of the shell headers).
+- **No self-consultation.** With dual identities possible, provider == patient (same `app_user`)
+  is rejected with 400 in all four booking paths — patient self-book/reschedule
+  (`PatientBookingService` compares the slot provider's `staff.userId` to the caller's `userId`)
+  and staff book/walk-in/reschedule (`AppointmentsService` compares it to the patient's
+  `user_id`). The UI hides the option too: find-care's doctor picker filters out the caller's own
+  staff memberships (`/auth/me` `staffId`s), and the staff booking dialog filters the slot
+  provider's own patient record out of the patient picker. Booking with a *different* doctor at
+  their own org stays allowed (staff being treated where they work is legitimate).
 
 ## TODO — change login identity (email/phone)  ⚠️ blocking a feature
 
