@@ -31,7 +31,7 @@ const ORG_MEMBER = [
 export class AvailabilityTemplatesController {
   constructor(private readonly templates: AvailabilityTemplatesService) {}
 
-  // Create the provider's weekly schedule (whole week in one call, startDate tomorrow+). There is
+  // Create the provider's weekly schedule (whole week in one call, startDate today+). There is
   // no edit: this SUPERSEDES their existing schedule at the practice from startDate on — old one
   // ends the day before; compatible bookings kept, the rest relocated (+notify).
   @Post()

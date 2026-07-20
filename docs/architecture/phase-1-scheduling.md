@@ -161,7 +161,8 @@ POST   /staff                              invite/add staff (roles, clinician fi
 POST   /availability-templates             the provider's WEEKLY SCHEDULE at a practice  [built]
        # Whole week in one atomic call: one template per listed weekday (per-day hours, shared
        # mode/capacity), `weeks` (1–8) occurrences each from its first occurrence on/after
-       # startDate (tomorrow or later, practice tz). There is NO edit/replace endpoint — creating
+       # startDate (today or later, practice tz — same-day supersede applies from the start of the
+       # practice-day). There is NO edit/replace endpoint — creating
        # a schedule SUPERSEDES the provider's existing schedule at that practice from startDate on:
        #   1. superseded slots from the cutover are blocked; empty ones deleted (frees their times —
        #      slots are unique per provider+startAt);

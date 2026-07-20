@@ -87,7 +87,9 @@ export class AvailabilityTemplatesService {
 
   /**
    * Create the provider's weekly schedule at a practice — and SUPERSEDE the existing one from
-   * `startDate` (tomorrow or later, practice tz) onward:
+   * `startDate` (today or later, practice tz) onward. Same-day supersede applies from the START of
+   * the practice-day: already-booked slots earlier today are preserved (kept/relocated per steps
+   * 3–4), only empty ones are cleared:
    *
    *   1. The superseded portion of the old schedule is retired: its slots from the cutover on are
    *      blocked (no new bookings) and the empty ones deleted, freeing their times for the new
@@ -111,9 +113,9 @@ export class AvailabilityTemplatesService {
     const startDate = parseDateOnly(dto.startDate);
 
     const today = utcToZonedDateOnly(new Date(), practice.timezone);
-    if (startDate.getTime() <= today.getTime()) {
+    if (startDate.getTime() < today.getTime()) {
       throw new BadRequestException(
-        'startDate must be tomorrow or later (practice time)',
+        'startDate must be today or later (practice time)',
       );
     }
     const { dayStart: cutover } = dayWindowUtc(

@@ -11,7 +11,7 @@ const dateOnly = z
  * A provider's weekly availability at a practice, created as a whole: one entry per working
  * weekday (per-day hours, shared mode/capacity), running `weeks` (1–8) consecutive weeks.
  * `startDate` anchors week 1 — each listed weekday recurs from its first occurrence on/after it —
- * and must be tomorrow or later in the practice's timezone (service-enforced; needs the tz).
+ * and must be today or later in the practice's timezone (service-enforced; needs the tz).
  *
  * There is NO edit/replace: creating a schedule SUPERSEDES the provider's existing schedule at
  * that practice from `startDate` on. The old schedule ends the day before; bookings whose exact
@@ -22,7 +22,7 @@ export const createAvailabilityTemplateSchema = z
   .object({
     practiceId: z.uuid(),
     providerId: z.uuid(),
-    startDate: dateOnly, // anchors week 1 (any weekday); must be tomorrow+ (practice tz)
+    startDate: dateOnly, // anchors week 1 (any weekday); must be today+ (practice tz)
     weeks: z.number().int().min(1).max(8),
     mode: z.enum(['slot', 'token']),
     slotDurationMins: z.number().int().positive().max(1440).optional(),
