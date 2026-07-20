@@ -251,11 +251,12 @@ export class VisitsService {
     return this.updateVisit(id, { vitals: dto.vitals, notes: dto.notes });
   }
 
-  /** Record the clinical narrative (presenting symptoms / diagnosis). */
+  /** Record the clinical narrative (presenting symptoms / diagnosis / general notes). */
   setClinical(id: string, dto: UpdateClinicalDto) {
     return this.updateVisit(id, {
       symptoms: dto.symptoms,
       diagnosis: dto.diagnosis,
+      notes: dto.notes,
     });
   }
 

@@ -148,8 +148,11 @@ The doctor's consultation moved from the cramped OP-queue dialog to a **full pag
 
 **The page** (`organization/visits/consultation.ts`): patient banner (age/gender/UHID/phone,
 token + visit number, status chip, **active allergies as red chips — impossible to miss**),
-visit lifecycle actions (start / complete with confirm), vitals grid (BP/pulse/temp/resp/SpO₂/
-height/weight + **live BMI**), symptoms/diagnosis/notes textareas (one save), prescriptions
+visit lifecycle actions (start / complete with confirm), a **Vitals card** — entry grid
+(BP/pulse/temp/resp/SpO₂/height/weight), **live BMI**, the collapsed history/trends sparklines,
+and its own "Save vitals" (sends the full vitals object, so clearing a field clears the record) —
+a separate **Clinical note card** (symptoms/diagnosis/notes with its own save; the `PATCH
+/visits/:id/clinical` endpoint gained `notes` for this), prescriptions
 (add/remove/instructions + **print**, reusing `PrescriptionPrintService`), test orders
 (add/status/remove), the conditions & allergies panel (add/resolve/reactivate/remove, with a
 shared-across-orgs warning on remove), and previous visits (expandable, with **"Copy
@@ -164,9 +167,10 @@ prescriptions to this visit"** — repeat-prescription in one click). Non-clinic
   prescriptions stay free text). Master-data entry is `/platform/medicines` (super_admin);
   **TODO: a platform data-entry page** for a catalog-curation platform user.
 - **Vitals trends** — `GET /visits/by-patient/:patientId` now returns each visit's `vitals`; the
-  page renders a **collapsed "Vitals trends" card** (doctor opens it on demand) with per-metric
-  sparklines (BP split into systolic/diastolic, pulse, SpO₂, temp, weight; ≥ 2 readings required;
-  latest/min/max as text; per-point hover titles).
+  Vitals card contains a **collapsed "History & trends" section** (doctor opens it on demand)
+  with per-metric sparklines (BP split into systolic/diastolic, pulse, SpO₂, temp, weight; ≥ 2
+  readings required; latest/min/max as text; per-point hover titles) — everything vitals lives in
+  the one card, with entry + history + its own save (2026-07-20 restructure).
 - **Book follow-up** — banner button → dialog (same doctor + practice, date → open slots),
   books `apptType: follow_up`. Backend: `doctor` + `doctor_assistant` joined the appointments
   booking role set (see roles-and-permissions.md).
@@ -178,6 +182,20 @@ prescriptions to this visit"** — repeat-prescription in one click). Non-clinic
 - **`doctor_assistant` role** — added to `UserRole` (UNSCOPED: clinical note, conditions,
   check-in, booking on any doctor's behalf; assistant→doctor scoping still deferred). Staff form
   offers it; the consultation page treats it as clinical.
+
+### Stylus-friendly consultation (2026-07-20, frontend-only)
+
+Handwriting-to-text at ZERO recognition cost and zero PHI egress — no Bedrock/server calls:
+- **OS-level stylus input is the primary path**: iPad Scribble / Windows Ink / Gboard convert
+  pen writing directly into ordinary fields. To serve it, the symptoms/diagnosis/notes textareas
+  are now **large on all screens** (`rows=5`, `min-h-32`, `field-sizing: content` so they grow).
+- **Quick-insert chips** on the prescription form (frequency `1-0-1`/`SOS`…, duration
+  `3/5/7/15 days`…, instructions `After food`…) — one tap beats writing.
+- **`HandwritingPad`** (`shared/handwriting/`) — a canvas pad shown ONLY where the experimental
+  Web Handwriting Recognition API exists (Chromium on ChromeOS/Android; feature-detected via
+  `isHandwritingSupported()`). Strokes are recognized **on-device** and inserted into a chosen
+  clinical field (Symptoms/Diagnosis/Notes). Deliberately rejected: client-side ML models
+  (huge, poor cursive accuracy) and unofficial free recognition endpoints (PHI egress).
 
 ## TODO — change login identity (email/phone)  ⚠️ blocking a feature
 

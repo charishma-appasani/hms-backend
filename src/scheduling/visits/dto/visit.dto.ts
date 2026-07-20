@@ -31,15 +31,20 @@ export const queueQuerySchema = z.object({
     .optional(),
 });
 
-/** Clinical narrative on the visit: presenting symptoms and/or the doctor's diagnosis (free text). */
+/** Clinical narrative on the visit: symptoms, diagnosis, and/or general notes (free text). */
 export const updateClinicalSchema = z
   .object({
     symptoms: z.string().trim().max(4000).optional(),
     diagnosis: z.string().trim().max(4000).optional(),
+    notes: z.string().trim().max(2000).optional(),
   })
-  .refine((v) => v.symptoms !== undefined || v.diagnosis !== undefined, {
-    message: 'Provide symptoms and/or diagnosis',
-  });
+  .refine(
+    (v) =>
+      v.symptoms !== undefined ||
+      v.diagnosis !== undefined ||
+      v.notes !== undefined,
+    { message: 'Provide symptoms, diagnosis and/or notes' },
+  );
 
 /** A prescribed medication line. */
 export const createPrescriptionSchema = z.object({
