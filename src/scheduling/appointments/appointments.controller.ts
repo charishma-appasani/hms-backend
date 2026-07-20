@@ -23,8 +23,21 @@ import {
 } from './dto/book-appointment.dto';
 
 /** Front desk + admins book/cancel; any member may read the schedule / queue. */
-const ORG_MEMBER = ['admin', 'doctor', 'front_desk', 'nurse'] as const;
-const FRONT_DESK = ['admin', 'front_desk'] as const;
+const ORG_MEMBER = [
+  'admin',
+  'doctor',
+  'doctor_assistant',
+  'front_desk',
+  'nurse',
+] as const;
+// Booking/rescheduling: reception plus doctor (own follow-ups from the consultation page) and
+// doctor_assistant (books on the doctor's behalf; doctor-scoping still deferred).
+const FRONT_DESK = [
+  'admin',
+  'doctor',
+  'doctor_assistant',
+  'front_desk',
+] as const;
 
 @Controller('appointments')
 export class AppointmentsController {

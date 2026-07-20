@@ -3,7 +3,8 @@
 Two independent axes (see [`auth-and-authz.md`](./auth-and-authz.md)):
 
 - **Platform roles** (`app_user.platform_role`, our own staff): `super_admin`, `support`.
-- **Org roles** (`staff.roles[]`, per membership): today `admin`, `doctor`, `front_desk`, `nurse`.
+- **Org roles** (`staff.roles[]`, per membership): today `admin`, `doctor`, `doctor_assistant`
+  (added 2026-07-19, UNSCOPED — see below), `front_desk`, `nurse`.
 
 Being a **patient** is not a role — it's having a `patient` profile. A person can hold several org
 roles, and the same human can be staff at one org and a patient elsewhere.
@@ -12,17 +13,24 @@ roles, and the same human can be staff at one org and a patient elsewhere.
 
 ## Current org-role permission matrix (AS-IS, from the `@Roles` guards)
 
-| Capability | admin | doctor | front_desk | nurse |
-| --- | :-: | :-: | :-: | :-: |
-| View patients / schedule / availability / appointments / visits (reads) | ✅ | ✅ | ✅ | ✅ |
-| Register / edit / link patients | ✅ | — | ✅ | ✅ |
-| Book / walk-in / reschedule / cancel appointments | ✅ | — | ✅ | — |
-| Check a patient in (create visit) | ✅ | — | ✅ | ✅ |
-| Advance visit status (in-consult → completed → …) | ✅ | ✅ | ✅ | ✅ |
-| Record vitals / notes | ✅ | ✅ | — | ✅ |
-| Manage availability templates & blocks (doctor schedules) | ✅ any provider | ✅ own only | — | — |
-| Manage practices | ✅ | — | — | — |
-| Manage staff (add/edit/remove) | ✅ | — | — | — |
+| Capability | admin | doctor | doctor_assistant | front_desk | nurse |
+| --- | :-: | :-: | :-: | :-: | :-: |
+| View patients / schedule / availability / appointments / visits / medicines (reads) | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Register / edit / link patients | ✅ | — | — | ✅ | ✅ |
+| Book / walk-in / reschedule / cancel appointments | ✅ | ✅ | ✅ | ✅ | — |
+| Check a patient in (create visit) | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Advance visit status (in-consult → completed → …) | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Record vitals / clinical note / prescriptions / tests | ✅ | ✅ | ✅ | — | ✅ |
+| Record patient conditions & allergies | ✅ | ✅ | ✅ | — | ✅ |
+| Manage availability templates & blocks (doctor schedules) | ✅ any provider | ✅ own only | — | — | — |
+| Manage practices | ✅ | — | — | — | — |
+| Manage staff (add/edit/remove) | ✅ | — | — | — | — |
+
+**`doctor_assistant` (2026-07-19) is UNSCOPED for now**: it can record the clinical note, check in,
+and book on ANY doctor's behalf — the assistant→doctor assignment model from the draft below is
+still deferred (it needs a `staff_practice`-style link). Booking roles also gained **`doctor`**
+(book their own follow-ups from the consultation page), which resolves the "doctors can't book"
+rough edge.
 
 Schedule writes carry a self-scoping check beyond `@Roles`: a `doctor` who is not also `admin` may
 only create/drop availability and blocks where `providerId` is **their own** staff id
@@ -40,7 +48,9 @@ Platform: `super_admin` creates/edits/deletes orgs (and can assume-org to onboar
   book appointments** (appointments restrict to `admin`/`front_desk`). Intentional? Probably should align.
 - ~~Doctors can't manage their own availability~~ — RESOLVED 2026-07-07: doctors manage their **own**
   schedule (templates + blocks); admins manage any provider's (see the self-scoping note above).
-- **Doctors can't book** their own appointments. Fine if reception always books; revisit for solo docs.
+- ~~Doctors can't book their own appointments~~ — RESOLVED 2026-07-19: `doctor` (and
+  `doctor_assistant`) are in the appointments booking/reschedule/cancel set; the consultation
+  page's "Book follow-up" uses it.
 - All roles are **org-wide** — there is no per-practice or per-doctor scoping yet (see the deferred
   `staff_practice` note in `data-model.md`).
 

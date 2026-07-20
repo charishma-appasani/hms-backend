@@ -16,14 +16,17 @@ import { formatDateOnly, parseDateOnly } from '../common/datetime';
 import type {
   AppUser,
   Patient,
+  PatientCondition,
   PatientRegistration,
 } from '../../generated/prisma/client';
 import type {
+  CreateConditionDto,
   CreatePatientDto,
   LinkStartDto,
   LinkVerifyDto,
   SignupStartDto,
   SignupVerifyDto,
+  UpdateConditionDto,
   UpdatePatientDto,
 } from './dto/patient.dto';
 
@@ -353,6 +356,98 @@ export class PatientsService {
     };
   }
 
+  // ─────────────── conditions & allergies (patient-global clinical facts) ───────────────
+
+  /**
+   * Conditions/allergies live on the GLOBAL patient (safety-critical info follows the patient
+   * across orgs), so org access is gated on an active registration here — same rule as `get()`.
+   */
+  private async assertRegisteredHere(patientId: string): Promise<void> {
+    const registration = await this.scoped.db.patientRegistration.findFirst({
+      where: { patientId, status: 'active' },
+      select: { id: true },
+    });
+    if (!registration) {
+      throw new NotFoundException(
+        'Patient is not registered at this organization',
+      );
+    }
+  }
+
+  async listConditions(patientId: string) {
+    await this.assertRegisteredHere(patientId);
+    const rows = await this.prisma.patientCondition.findMany({
+      where: { patientId, deletedAt: null },
+      orderBy: { createdAt: 'desc' },
+    });
+    return rows.map(toConditionResponse);
+  }
+
+  async addCondition(patientId: string, dto: CreateConditionDto) {
+    await this.assertRegisteredHere(patientId);
+    const created = await this.prisma.patientCondition.create({
+      data: {
+        patientId,
+        type: dto.type,
+        name: dto.name,
+        status: dto.status,
+        notes: dto.notes,
+        recordedByOrg: this.scoped.orgId,
+        recordedByUser: this.scoped.actorId,
+      },
+    });
+    await this.audit.record({
+      action: 'patient.condition.add',
+      entityType: 'patient_condition',
+      entityId: created.id,
+      patientId,
+      metadata: { type: created.type, name: created.name },
+    });
+    return toConditionResponse(created);
+  }
+
+  async updateCondition(
+    patientId: string,
+    conditionId: string,
+    dto: UpdateConditionDto,
+  ) {
+    await this.assertRegisteredHere(patientId);
+    const before = await this.prisma.patientCondition.findFirst({
+      where: { id: conditionId, patientId, deletedAt: null },
+    });
+    if (!before) throw new NotFoundException('Condition not found');
+    const updated = await this.prisma.patientCondition.update({
+      where: { id: conditionId },
+      data: { name: dto.name, status: dto.status, notes: dto.notes },
+    });
+    await this.audit.record({
+      action: 'patient.condition.update',
+      entityType: 'patient_condition',
+      entityId: conditionId,
+      patientId,
+      metadata: diffFields(
+        { name: before.name, status: before.status, notes: before.notes },
+        dto,
+      ),
+    });
+    return toConditionResponse(updated);
+  }
+
+  async removeCondition(patientId: string, conditionId: string): Promise<void> {
+    await this.assertRegisteredHere(patientId);
+    const { count } = await this.prisma.patientCondition.updateMany({
+      where: { id: conditionId, patientId, deletedAt: null },
+      data: { deletedAt: new Date(), deletedBy: this.scoped.actorId },
+    });
+    if (count === 0) throw new NotFoundException('Condition not found');
+    await this.audit.record({
+      action: 'patient.condition.remove',
+      entityType: 'patient_condition',
+      entityId: conditionId,
+      patientId,
+    });
+  }
+
   // ─────────────── cross-org link (existing patient → this org) ───────────────
 
   /**
@@ -463,6 +558,18 @@ export class PatientsService {
     );
     return toPatientResponse(patient.user, patient, registration);
   }
+}
+
+function toConditionResponse(c: PatientCondition) {
+  return {
+    id: c.id,
+    type: c.type,
+    name: c.name,
+    status: c.status,
+    notes: c.notes,
+    createdAt: c.createdAt,
+    updatedAt: c.updatedAt,
+  };
 }
 
 function toPatientResponse(

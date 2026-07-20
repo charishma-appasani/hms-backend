@@ -22,7 +22,13 @@ import {
 } from './dto/schedule-exception.dto';
 
 /** Any active member may view blocks; admins (any provider) and doctors (own) create/remove them. */
-const ORG_MEMBER = ['admin', 'doctor', 'front_desk', 'nurse'] as const;
+const ORG_MEMBER = [
+  'admin',
+  'doctor',
+  'doctor_assistant',
+  'front_desk',
+  'nurse',
+] as const;
 
 @Controller('schedule-exceptions')
 export class ScheduleExceptionsController {

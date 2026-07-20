@@ -125,6 +125,55 @@ CREATE INDEX patient_abha_idx ON patient (abha_number);
 > (OTP/consent, §8) is built. **Org self-signup** (public `POST /org-signup/*`) also rides this
 > table — see onboarding-and-bootstrap.md Step 1b.
 
+```sql
+CREATE TYPE "ConditionType"   AS ENUM ('condition', 'allergy');
+CREATE TYPE "ConditionStatus" AS ENUM ('active', 'resolved');
+
+CREATE TABLE patient_condition (            -- existing conditions + allergies (2026-07-19)
+  id               uuid PRIMARY KEY,
+  patient_id       uuid NOT NULL REFERENCES patient(id),
+  type             "ConditionType"   NOT NULL DEFAULT 'condition',
+  name             varchar(200) NOT NULL,
+  status           "ConditionStatus" NOT NULL DEFAULT 'active',
+  notes            text,
+  recorded_by_org  uuid,                    -- attribution (which org/user noted it)
+  recorded_by_user uuid,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL,
+  deleted_at timestamptz,                   -- soft delete
+  deleted_by uuid
+);
+CREATE INDEX patient_condition_patient_id_idx ON patient_condition (patient_id);
+```
+
+> `patient_condition` is **GLOBAL like the patient** (no `org_id`): allergies and chronic
+> illnesses are safety-critical and must follow the patient to every org treating them. Org
+> access is gated on an **active `patient_registration`** at the acting org (service-level, same
+> rule as reading the patient), writes are CLINICAL-role only, and every change is audited
+> (`patient.condition.*`) with org/user attribution.
+
+```sql
+CREATE TABLE medicine (                     -- master medicine catalog (2026-07-19)
+  id           uuid PRIMARY KEY,
+  name         varchar(200) NOT NULL,       -- brand/trade name (what doctors type)
+  generic_name varchar(200),
+  manufacturer varchar(200),
+  ingredients  text,                        -- composition, free text
+  form         varchar(60),                 -- tablet / syrup / injection …
+  strength     varchar(60),                 -- 500 mg, 5 mg/5 ml …
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL,
+  deleted_at timestamptz                    -- soft delete
+);
+CREATE INDEX medicine_name_idx ON medicine (name);
+```
+
+> `medicine` is **GLOBAL and platform-curated** (no `org_id`): one master catalog feeds the
+> prescription autocomplete at every org (`GET /medicines?q=`, org members). Master-data entry is
+> super_admin-only under `/platform/medicines` (a data-entry UI is a future platform page — the
+> endpoints work via curl/import until then). Prescriptions stay **free text** — the catalog is a
+> typing aid, never a constraint.
+
 ## 5. Tenant layer (every table has `org_id`)
 
 > **Standard audit columns** on every tenant *record* table: `created_at`, `updated_at`

@@ -8,7 +8,13 @@ import {
 } from './dto/availability-query.dto';
 
 /** Any active member may view availability (front desk books from it). */
-const ORG_MEMBER = ['admin', 'doctor', 'front_desk', 'nurse'] as const;
+const ORG_MEMBER = [
+  'admin',
+  'doctor',
+  'doctor_assistant',
+  'front_desk',
+  'nurse',
+] as const;
 
 @Controller('availability')
 export class SlotsController {

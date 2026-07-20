@@ -145,6 +145,38 @@ export class VisitsService {
     return rows.map(toResponse);
   }
 
+  /**
+   * A patient's past visits AT THIS ORG, newest first — the consultation page's history panel.
+   * Summaries only; the panel fetches `get()` for a full past record (incl. prescriptions).
+   */
+  async historyForPatient(patientId: string) {
+    const rows = await this.scoped.db.visit.findMany({
+      where: { patientId },
+      orderBy: { checkInAt: 'desc' },
+      include: {
+        practice: { select: { name: true } },
+        provider: {
+          select: {
+            specialty: true,
+            user: { select: { firstName: true, lastName: true } },
+          },
+        },
+      },
+    });
+    return rows.map((v) => ({
+      id: v.id,
+      visitNumber: v.visitNumber,
+      status: v.status,
+      checkInAt: v.checkInAt,
+      completedAt: v.completedAt,
+      practiceName: v.practice.name,
+      providerName:
+        `${v.provider.user.firstName} ${v.provider.user.lastName ?? ''}`.trim(),
+      diagnosis: v.diagnosis,
+      vitals: v.vitals, // feeds the consultation page's vitals-trends sparklines
+    }));
+  }
+
   async get(id: string) {
     const visit = await this.scoped.db.visit.findFirst({
       where: { id },

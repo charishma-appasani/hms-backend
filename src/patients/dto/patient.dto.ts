@@ -65,9 +65,29 @@ export const linkVerifySchema = z.object({
   code: z.string().regex(/^\d{6}$/, 'Code must be 6 digits'),
 });
 
+/** A patient-level clinical fact: an existing condition or an allergy (safety-critical). */
+export const createConditionSchema = z.object({
+  type: z.enum(['condition', 'allergy']).default('condition'),
+  name: z.string().trim().min(1).max(200),
+  status: z.enum(['active', 'resolved']).default('active'),
+  notes: z.string().trim().max(2000).optional(),
+});
+
+export const updateConditionSchema = z
+  .object({
+    name: z.string().trim().min(1).max(200).optional(),
+    status: z.enum(['active', 'resolved']).optional(),
+    notes: z.string().trim().max(2000).optional(),
+  })
+  .refine((v) => Object.values(v).some((x) => x !== undefined), {
+    message: 'Provide at least one field to update',
+  });
+
 export type CreatePatientDto = z.infer<typeof createPatientSchema>;
 export type UpdatePatientDto = z.infer<typeof updatePatientSchema>;
 export type SignupStartDto = z.infer<typeof signupStartSchema>;
 export type SignupVerifyDto = z.infer<typeof signupVerifySchema>;
 export type LinkStartDto = z.infer<typeof linkStartSchema>;
 export type LinkVerifyDto = z.infer<typeof linkVerifySchema>;
+export type CreateConditionDto = z.infer<typeof createConditionSchema>;
+export type UpdateConditionDto = z.infer<typeof updateConditionSchema>;

@@ -39,6 +39,7 @@ enum Status {
 enum UserRole {
   admin
   doctor
+  doctor_assistant // records the clinical note on a doctor's behalf (doctor-scoping still deferred)
   front_desk
   nurse
 }
@@ -159,9 +160,64 @@ model Patient {
   consents      Consent[]
   appointments  Appointment[]
   visits        Visit[]
+  conditions    PatientCondition[]
 
   @@index([abhaNumber])
   @@map("patient")
+}
+
+enum ConditionType {
+  condition // chronic/ongoing illness (diabetes, hypertension, asthma, …)
+  allergy // drug/food/other allergy — surfaced prominently in the consultation banner
+}
+
+enum ConditionStatus {
+  active
+  resolved
+}
+
+// Patient-level clinical facts (existing conditions + allergies). GLOBAL like the patient (no
+// org_id): allergies and chronic illnesses are safety-critical and must follow the patient to
+// every org they're registered at. Staff access requires an ACTIVE registration at the acting
+// org (enforced in PatientsService); attribution records which org/user noted it. Soft delete.
+model PatientCondition {
+  id             String          @id @default(uuid(7)) @db.Uuid
+  patientId      String          @map("patient_id") @db.Uuid
+  type           ConditionType   @default(condition)
+  name           String          @db.VarChar(200)
+  status         ConditionStatus @default(active)
+  notes          String?
+  recordedByOrg  String?         @map("recorded_by_org") @db.Uuid
+  recordedByUser String?         @map("recorded_by_user") @db.Uuid
+  createdAt      DateTime        @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt      DateTime        @updatedAt @map("updated_at") @db.Timestamptz
+  deletedAt      DateTime?       @map("deleted_at") @db.Timestamptz
+  deletedBy      String?         @map("deleted_by") @db.Uuid
+
+  patient Patient @relation(fields: [patientId], references: [id])
+
+  @@index([patientId])
+  @@map("patient_condition")
+}
+
+// Master medicine catalog (GLOBAL, platform-curated — no org): feeds the prescription
+// autocomplete on the consultation page. Maintained by platform operators via
+// /platform/medicines (a data-entry UI is a future page; the endpoints work via curl/import
+// until then). Prescriptions stay free text — picking a suggestion just fills the fields.
+model Medicine {
+  id           String    @id @default(uuid(7)) @db.Uuid
+  name         String    @db.VarChar(200) // brand/trade name (what doctors type)
+  genericName  String?   @map("generic_name") @db.VarChar(200)
+  manufacturer String?   @db.VarChar(200)
+  ingredients  String? // composition, free text
+  form         String?   @db.VarChar(60) // tablet / syrup / injection / cream …
+  strength     String?   @db.VarChar(60) // 500 mg, 5 mg/5 ml …
+  createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt    DateTime  @updatedAt @map("updated_at") @db.Timestamptz
+  deletedAt    DateTime? @map("deleted_at") @db.Timestamptz
+
+  @@index([name])
+  @@map("medicine")
 }
 
 // Short-lived OTP challenge (global; no org) — patient self-signup, cross-org link consent,

@@ -32,10 +32,24 @@ import {
   type UpdateTestOrderDto,
 } from './dto/visit.dto';
 
-const ORG_MEMBER = ['admin', 'doctor', 'front_desk', 'nurse'] as const;
+const ORG_MEMBER = [
+  'admin',
+  'doctor',
+  'doctor_assistant',
+  'front_desk',
+  'nurse',
+] as const;
 // Who can check patients in / start the visit. Includes doctor (a doctor can start their own visit).
-const FRONT_DESK = ['admin', 'doctor', 'front_desk', 'nurse'] as const;
-const CLINICAL = ['admin', 'doctor', 'nurse'] as const; // who records the clinical note
+const FRONT_DESK = [
+  'admin',
+  'doctor',
+  'doctor_assistant',
+  'front_desk',
+  'nurse',
+] as const;
+// Who records the clinical note. doctor_assistant records on the doctor's behalf
+// (doctor-scoping is still deferred — see roles-and-permissions.md).
+const CLINICAL = ['admin', 'doctor', 'doctor_assistant', 'nurse'] as const;
 
 @Controller('visits')
 export class VisitsController {
@@ -51,6 +65,13 @@ export class VisitsController {
   @Roles(...ORG_MEMBER)
   queue(@Query(new ZodValidationPipe(queueQuerySchema)) query: QueueQueryDto) {
     return this.visits.queue(query);
+  }
+
+  /** A patient's visit history at this org (consultation page's "previous visits" panel). */
+  @Get('by-patient/:patientId')
+  @Roles(...ORG_MEMBER)
+  historyForPatient(@Param('patientId', ParseUUIDPipe) patientId: string) {
+    return this.visits.historyForPatient(patientId);
   }
 
   @Get(':id')

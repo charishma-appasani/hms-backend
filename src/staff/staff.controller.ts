@@ -22,7 +22,13 @@ import {
 } from './dto/staff.dto';
 
 /** Any active member may read the org's staff directory. */
-const ORG_MEMBER = ['admin', 'doctor', 'front_desk', 'nurse'] as const;
+const ORG_MEMBER = [
+  'admin',
+  'doctor',
+  'doctor_assistant',
+  'front_desk',
+  'nurse',
+] as const;
 
 /**
  * Staff (org membership) management. Mutations use StaffManageGuard (org admin OR platform

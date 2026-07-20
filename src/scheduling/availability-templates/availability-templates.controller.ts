@@ -19,7 +19,13 @@ import {
 } from './dto/availability-template.dto';
 
 /** Any active member may read the schedule; admins (any provider) and doctors (own) mutate it. */
-const ORG_MEMBER = ['admin', 'doctor', 'front_desk', 'nurse'] as const;
+const ORG_MEMBER = [
+  'admin',
+  'doctor',
+  'doctor_assistant',
+  'front_desk',
+  'nurse',
+] as const;
 
 @Controller('availability-templates')
 export class AvailabilityTemplatesController {

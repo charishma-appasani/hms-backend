@@ -128,6 +128,57 @@ sequences).
   provider's own patient record out of the patient picker. Booking with a *different* doctor at
   their own org stays allowed (staff being treated where they work is legitimate).
 
+## Follow-up built (2026-07-19) — consultation workspace + patient conditions
+
+The doctor's consultation moved from the cramped OP-queue dialog to a **full page** —
+`/organization/visits/:id` — since the consultation is the center of the product. The old
+`ClinicalRecordDialog` was removed; OP-queue cards now link to the page (waiting/in-consultation
+→ "Open", done → "View", so completed records stay reviewable).
+
+**New backend surface:**
+- **`patient_condition`** (migration `20260719040000_add_patient_conditions`): existing
+  conditions + **allergies**, patient-GLOBAL (see data-model.md §4 for the tenancy rationale —
+  safety-critical facts follow the patient). `GET/POST /patients/:id/conditions`,
+  `PATCH/DELETE /patients/:id/conditions/:conditionId` — reads ORG_MEMBER, writes CLINICAL
+  (admin/doctor/nurse), all gated on an active registration at the acting org, all audited
+  (`patient.condition.add|update|remove`).
+- **`GET /visits/by-patient/:patientId`** — the patient's visit history at this org (summaries,
+  newest first) for the page's previous-visits panel; the panel fetches `GET /visits/:id` for a
+  full past record on expand.
+
+**The page** (`organization/visits/consultation.ts`): patient banner (age/gender/UHID/phone,
+token + visit number, status chip, **active allergies as red chips — impossible to miss**),
+visit lifecycle actions (start / complete with confirm), vitals grid (BP/pulse/temp/resp/SpO₂/
+height/weight + **live BMI**), symptoms/diagnosis/notes textareas (one save), prescriptions
+(add/remove/instructions + **print**, reusing `PrescriptionPrintService`), test orders
+(add/status/remove), the conditions & allergies panel (add/resolve/reactivate/remove, with a
+shared-across-orgs warning on remove), and previous visits (expandable, with **"Copy
+prescriptions to this visit"** — repeat-prescription in one click). Non-clinical roles
+(front_desk) get the page read-only; the server enforces the same via @Roles.
+
+### Consultation round 2 (same day) — catalog, trends, follow-ups, queue strip, results, doctor_assistant
+
+- **Master medicine catalog** (`medicine` table, GLOBAL/platform-curated — data-model.md §4):
+  `GET /medicines?q=` (org members) powers an **autocomplete on the prescription drug field**
+  (debounced, ≥ 2 chars; picking a suggestion fills the drug and prefills dosage from strength —
+  prescriptions stay free text). Master-data entry is `/platform/medicines` (super_admin);
+  **TODO: a platform data-entry page** for a catalog-curation platform user.
+- **Vitals trends** — `GET /visits/by-patient/:patientId` now returns each visit's `vitals`; the
+  page renders a **collapsed "Vitals trends" card** (doctor opens it on demand) with per-metric
+  sparklines (BP split into systolic/diastolic, pulse, SpO₂, temp, weight; ≥ 2 readings required;
+  latest/min/max as text; per-point hover titles).
+- **Book follow-up** — banner button → dialog (same doctor + practice, date → open slots),
+  books `apptType: follow_up`. Backend: `doctor` + `doctor_assistant` joined the appointments
+  booking role set (see roles-and-permissions.md).
+- **Next-patient strip** — the banner shows today's waiting count + next token for this
+  provider+practice with an "Open next patient" link (refreshed after status transitions).
+- **Test results** — inline result entry per test order (saving a result auto-advances status to
+  `resulted`). **File attachments (lab reports) remain blocked on the asset-storage work**
+  (asset-storage.md is still a decision record; presigned upload/download not yet built).
+- **`doctor_assistant` role** — added to `UserRole` (UNSCOPED: clinical note, conditions,
+  check-in, booking on any doctor's behalf; assistant→doctor scoping still deferred). Staff form
+  offers it; the consultation page treats it as clinical.
+
 ## TODO — change login identity (email/phone)  ⚠️ blocking a feature
 
 Email/phone double as the **Cognito login username**, and there is no flow to change the login identity

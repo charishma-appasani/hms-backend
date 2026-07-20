@@ -20,7 +20,13 @@ import {
 } from './dto/practice.dto';
 
 /** Any active member of the org may read its practices; only admins mutate them. */
-const ORG_MEMBER = ['admin', 'doctor', 'front_desk', 'nurse'] as const;
+const ORG_MEMBER = [
+  'admin',
+  'doctor',
+  'doctor_assistant',
+  'front_desk',
+  'nurse',
+] as const;
 
 /**
  * Practices live inside an org. All routes require an `X-Org-Id` with an active membership

@@ -1,7 +1,9 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
+  HttpCode,
   Ip,
   Param,
   ParseUUIDPipe,
@@ -19,17 +21,29 @@ import {
   signupVerifySchema,
   linkStartSchema,
   linkVerifySchema,
+  createConditionSchema,
+  updateConditionSchema,
   type CreatePatientDto,
   type UpdatePatientDto,
   type SignupStartDto,
   type SignupVerifyDto,
   type LinkStartDto,
   type LinkVerifyDto,
+  type CreateConditionDto,
+  type UpdateConditionDto,
 } from './dto/patient.dto';
 
 /** Any active member may read the org's patients; front desk / nurses register + edit them. */
-const ORG_MEMBER = ['admin', 'doctor', 'front_desk', 'nurse'] as const;
+const ORG_MEMBER = [
+  'admin',
+  'doctor',
+  'doctor_assistant',
+  'front_desk',
+  'nurse',
+] as const;
 const FRONT_DESK = ['admin', 'front_desk', 'nurse'] as const;
+// Who records conditions/allergies. doctor_assistant records on the doctor's behalf.
+const CLINICAL = ['admin', 'doctor', 'doctor_assistant', 'nurse'] as const;
 
 @Controller('patients')
 export class PatientsController {
@@ -99,5 +113,42 @@ export class PatientsController {
     @Body(new ZodValidationPipe(updatePatientSchema)) dto: UpdatePatientDto,
   ) {
     return this.patients.update(id, dto);
+  }
+
+  // ── conditions & allergies (patient-global; requires an active registration here) ──
+
+  @Get(':id/conditions')
+  @Roles(...ORG_MEMBER)
+  listConditions(@Param('id', ParseUUIDPipe) id: string) {
+    return this.patients.listConditions(id);
+  }
+
+  @Post(':id/conditions')
+  @Roles(...CLINICAL)
+  addCondition(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body(new ZodValidationPipe(createConditionSchema)) dto: CreateConditionDto,
+  ) {
+    return this.patients.addCondition(id, dto);
+  }
+
+  @Patch(':id/conditions/:conditionId')
+  @Roles(...CLINICAL)
+  updateCondition(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Param('conditionId', ParseUUIDPipe) conditionId: string,
+    @Body(new ZodValidationPipe(updateConditionSchema)) dto: UpdateConditionDto,
+  ) {
+    return this.patients.updateCondition(id, conditionId, dto);
+  }
+
+  @Delete(':id/conditions/:conditionId')
+  @Roles(...CLINICAL)
+  @HttpCode(204)
+  removeCondition(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Param('conditionId', ParseUUIDPipe) conditionId: string,
+  ): Promise<void> {
+    return this.patients.removeCondition(id, conditionId);
   }
 }
