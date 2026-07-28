@@ -14,6 +14,9 @@ export const createMedicineSchema = z.object({
   ingredients: z.string().trim().max(4000).optional(),
   form: z.string().trim().max(60).optional(),
   strength: z.string().trim().max(60).optional(),
+  // Pharmacological class powering the tier-2 allergy check (see ai-features.md). Free text,
+  // normalized in code — e.g. 'penicillins', 'sulfonamides', 'nsaids'.
+  drugClass: z.string().trim().max(80).optional(),
 });
 
 export const updateMedicineSchema = createMedicineSchema

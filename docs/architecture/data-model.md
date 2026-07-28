@@ -64,6 +64,8 @@ CREATE TYPE consent_type        AS ENUM ('org_link');
 CREATE TYPE consent_method      AS ENUM ('otp');
 CREATE TYPE sequence_scope      AS ENUM ('org','practice');
 CREATE TYPE sequence_name       AS ENUM ('uhid','visit');   -- token# = appt_booked + walkin_booked
+CREATE TYPE ai_generation_kind   AS ENUM ('visit_summary','patient_summary');
+CREATE TYPE ai_generation_status AS ENUM ('pending','ready','failed');
 ```
 
 ## 4. Platform layer (global — no `org_id`)
@@ -161,6 +163,9 @@ CREATE TABLE medicine (                     -- master medicine catalog (2026-07-
   ingredients  text,                        -- composition, free text
   form         varchar(60),                 -- tablet / syrup / injection …
   strength     varchar(60),                 -- 500 mg, 5 mg/5 ml …
+  drug_class   varchar(80),                 -- pharmacological class for the tier-2 allergy check
+                                            -- (e.g. 'Penicillins'); nullable → tier-1 only.
+                                            -- See ai-features.md §prescription safety check
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL,
   deleted_at timestamptz                    -- soft delete
@@ -438,6 +443,48 @@ CREATE TABLE audit_log (                            -- append-only
   user_agent    text,
   created_at    timestamptz NOT NULL DEFAULT now()
 );
+
+-- Cached AI output (see ai-features.md). ADVISORY — never part of the clinical record, which is
+-- why it lives outside `visit` and has no soft delete. Holds the exact model input for
+-- medico-legal reproducibility, the hash that drives cache invalidation, and the doctor's
+-- thumbs up/down that forms the evaluation set.
+CREATE TABLE ai_generation (
+  id             uuid PRIMARY KEY,
+  org_id         uuid NOT NULL REFERENCES organization(id),
+  kind           ai_generation_kind NOT NULL,
+  visit_id       uuid REFERENCES visit(id),          -- null for future patient-level kinds
+  patient_id     uuid NOT NULL REFERENCES patient(id),
+  status         ai_generation_status NOT NULL DEFAULT 'pending',
+  input_hash     varchar(64) NOT NULL,               -- sha256 of the canonical dossier JSON
+  input_snapshot jsonb,                              -- exactly what the model was given (PHI)
+  output         jsonb,                              -- parsed, schema-validated result
+  model_id       varchar(160), input_tokens int, output_tokens int, latency_ms int,
+  error          text,
+  feedback       int, feedback_by uuid, feedback_at timestamptz,   -- -1 / +1
+  created_at timestamptz NOT NULL DEFAULT now(), created_by uuid,
+  updated_at timestamptz NOT NULL DEFAULT now(), updated_by uuid,
+  UNIQUE (visit_id, kind)                            -- regeneration overwrites in place
+);
+
+-- Ask-this-chart Q&A log (see ai-features.md). APPEND-ONLY — many rows per patient, each a
+-- distinct question — which is why it is SEPARATE from ai_generation (that one is a single
+-- cached artifact per visit, overwritten in place). No caching (every question differs), no
+-- status (synchronous). Stores input_hash (which record state answered it) but NOT the full
+-- dossier snapshot per question. audit_log records each access.
+CREATE TABLE ai_chart_query (
+  id              uuid PRIMARY KEY,
+  org_id          uuid NOT NULL REFERENCES organization(id),
+  visit_id        uuid REFERENCES visit(id),          -- the visit it was asked from (context)
+  patient_id      uuid NOT NULL REFERENCES patient(id),
+  question        text NOT NULL,
+  answer          text NOT NULL,
+  found_in_record boolean NOT NULL,                   -- false = record didn't contain the answer
+  citations       jsonb NOT NULL DEFAULT '[]',        -- dossier cite ids (string[])
+  input_hash      varchar(64) NOT NULL,               -- sha256 of the dossier that answered it
+  model_id        varchar(160), input_tokens int, output_tokens int, latency_ms int,
+  feedback        int, feedback_by uuid, feedback_at timestamptz,   -- -1 / +1 (eval signal)
+  created_at timestamptz NOT NULL DEFAULT now(), created_by uuid
+);
 ```
 
 ## 6. Relationships (summary)
@@ -454,6 +501,9 @@ availability_template 1───* slot          (slots materialized from templat
 slot 1───* appointment                     (capacity buckets; booked & walk-in both attach)
 appointment *───1 patient, staff (`provider_id`), practice, slot
 visit       *───1 patient, staff (`provider_id`), practice; 0..1 appointment (normally set)
+visit 1───* prescription / test_order       (clinical record lines)
+visit 0..1─1 ai_generation (per kind)       (advisory AI output — NOT clinical record)
+patient 1───* ai_chart_query                (ask-this-chart Q&A log — advisory, append-only)
 ```
 
 ## 7. Tenant scoping (application level)
@@ -604,3 +654,8 @@ OTP once the record is `is_verified` or linked to >1 org; contact fields stay ed
 audited; a privileged staff override (with mandatory reason) covers wrong-contact cases.
 Reserve `consent_type = 'demographic_edit'` for this. No schema change needed beyond that
 enum value, so deferring is cheap.
+
+**Consent gate on AI processing (deferred).** `ai_generation` rows are produced today under a
+single environment-wide `AI_ENABLED` flag. Before customer rollout this needs a per-org opt-in
+plus a patient consent record — reserve `consent_type = 'ai_processing'`. Same reasoning as
+above: one enum value and a check, so deferring costs nothing. See ai-features.md.

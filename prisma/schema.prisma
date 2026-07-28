@@ -123,6 +123,17 @@ enum SequenceName {
   visit
 }
 
+enum AiGenerationKind {
+  visit_summary // the doctor-facing patient orientation shown when a visit starts
+  patient_summary // the plain-language after-visit summary shown to the patient in the portal
+}
+
+enum AiGenerationStatus {
+  pending // row claimed, inference in flight
+  ready // output present and parsed
+  failed // inference or parsing failed; `error` explains. Never blocks the clinical flow
+}
+
 // ──────────────── platform layer (global, no org_id) ────────────────
 model AppUser {
   id            String        @id @default(uuid(7)) @db.Uuid
@@ -161,6 +172,8 @@ model Patient {
   appointments  Appointment[]
   visits        Visit[]
   conditions    PatientCondition[]
+  aiGenerations AiGeneration[]
+  aiChartQueries AiChartQuery[]
 
   @@index([abhaNumber])
   @@map("patient")
@@ -212,6 +225,10 @@ model Medicine {
   ingredients  String? // composition, free text
   form         String?   @db.VarChar(60) // tablet / syrup / injection / cream …
   strength     String?   @db.VarChar(60) // 500 mg, 5 mg/5 ml …
+  // Pharmacological class for the deterministic allergy check (tier 2 — see ai-features.md).
+  // Free text normalized in code against DRUG_CLASSES (e.g. 'penicillins', 'sulfonamides',
+  // 'nsaids'). Nullable: rows without a class still get tier-1 token matching.
+  drugClass    String?   @map("drug_class") @db.VarChar(80)
   createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz
   updatedAt    DateTime  @updatedAt @map("updated_at") @db.Timestamptz
   deletedAt    DateTime? @map("deleted_at") @db.Timestamptz
@@ -271,6 +288,8 @@ model Organization {
   auditLogs             AuditLog[]
   prescriptions         Prescription[]
   testOrders            TestOrder[]
+  aiGenerations         AiGeneration[]
+  aiChartQueries        AiChartQuery[]
 
   @@map("organization")
 }
@@ -571,6 +590,8 @@ model Visit {
   appointment Appointment? @relation(fields: [appointmentId], references: [id])
   prescriptions Prescription[]
   testOrders    TestOrder[]
+  aiGenerations AiGeneration[]
+  aiChartQueries AiChartQuery[]
 
   @@unique([practiceId, visitNumber])
   @@index([orgId, practiceId, providerId, status, checkInAt])
@@ -652,4 +673,81 @@ model AuditLog {
   @@index([orgId, createdAt])
   @@index([patientId])
   @@map("audit_log")
+}
+
+// One cached AI generation (see docs/architecture/ai-features.md). Holds the exact input the
+// model saw plus its output, so a generation is reproducible after the fact (medico-legal),
+// cacheable (`input_hash` = sha256 of the canonical dossier), and evaluable (`feedback`).
+// AI output is ADVISORY — it is never part of the clinical record, which is why this table is
+// separate from `visit` and carries no soft delete.
+model AiGeneration {
+  id        String             @id @default(uuid(7)) @db.Uuid
+  orgId     String             @map("org_id") @db.Uuid
+  kind      AiGenerationKind
+  visitId   String?            @map("visit_id") @db.Uuid // null for future patient-level kinds
+  patientId String             @map("patient_id") @db.Uuid
+  status    AiGenerationStatus @default(pending)
+  // sha256 of the canonical dossier JSON — a mismatch means the record changed → regenerate.
+  inputHash String             @map("input_hash") @db.VarChar(64)
+  // Exactly what the model was given. PHI, same as its source rows; kept for reproducibility.
+  inputSnapshot Json?    @map("input_snapshot")
+  output        Json? // the parsed, schema-validated result
+  modelId       String?  @map("model_id") @db.VarChar(160) // resolved inference profile / model id
+  inputTokens   Int?     @map("input_tokens")
+  outputTokens  Int?     @map("output_tokens")
+  latencyMs     Int?     @map("latency_ms")
+  error         String? // failure reason when status = failed
+  // Doctor feedback: -1 / +1. Drives the evaluation set; nullable = not rated.
+  feedback   Int?
+  feedbackBy String?   @map("feedback_by") @db.Uuid
+  feedbackAt DateTime? @map("feedback_at") @db.Timestamptz
+  createdAt  DateTime  @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt  DateTime  @updatedAt @map("updated_at") @db.Timestamptz
+  createdBy  String?   @map("created_by") @db.Uuid
+  updatedBy  String?   @map("updated_by") @db.Uuid
+
+  org     Organization @relation(fields: [orgId], references: [id])
+  visit   Visit?       @relation(fields: [visitId], references: [id])
+  patient Patient      @relation(fields: [patientId], references: [id])
+
+  // One current generation per visit per kind — regeneration overwrites in place (the audit_log
+  // records each regeneration). Switch to append-only if summaries ever become quotable.
+  @@unique([visitId, kind])
+  @@index([orgId, patientId, kind])
+  @@map("ai_generation")
+}
+
+// Ask-this-chart: one natural-language question a clinician asked about a patient, and the
+// model's grounded answer (see docs/architecture/ai-features.md). APPEND-ONLY — many rows per
+// patient, each a distinct question — which is why it is its OWN table, not `ai_generation`
+// (that one is a single cached artifact per visit, overwritten in place). No caching (every
+// question differs) and no status lifecycle (the request is synchronous — the clinician waits).
+// Stores `input_hash` (which record state answered it) but NOT the full dossier snapshot: one
+// snapshot per question is heavy, and the audit need here is "who asked what, answered how".
+model AiChartQuery {
+  id            String   @id @default(uuid(7)) @db.Uuid
+  orgId         String   @map("org_id") @db.Uuid
+  visitId       String?  @map("visit_id") @db.Uuid // the visit it was asked from (context only)
+  patientId     String   @map("patient_id") @db.Uuid
+  question      String   @db.Text
+  answer        String   @db.Text
+  foundInRecord Boolean  @map("found_in_record") // false = the record didn't contain the answer
+  citations     Json     @default("[]") // dossier cite ids the answer drew on (string[])
+  inputHash     String   @map("input_hash") @db.VarChar(64) // sha256 of the dossier that answered it
+  modelId       String?  @map("model_id") @db.VarChar(160)
+  inputTokens   Int?     @map("input_tokens")
+  outputTokens  Int?     @map("output_tokens")
+  latencyMs     Int?     @map("latency_ms")
+  feedback      Int? // -1 / +1, the evaluation signal
+  feedbackBy    String?  @map("feedback_by") @db.Uuid
+  feedbackAt    DateTime? @map("feedback_at") @db.Timestamptz
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz
+  createdBy     String?  @map("created_by") @db.Uuid
+
+  org     Organization @relation(fields: [orgId], references: [id])
+  visit   Visit?       @relation(fields: [visitId], references: [id])
+  patient Patient      @relation(fields: [patientId], references: [id])
+
+  @@index([orgId, patientId, createdAt])
+  @@map("ai_chart_query")
 }

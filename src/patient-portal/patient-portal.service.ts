@@ -3,6 +3,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { throwMappedPrismaError } from '../common/prisma-errors';
 import { formatDateOnly, parseDateOnly } from '../common/datetime';
+import { patientSummarySchema } from '../ai/patient-summary.schema';
 import type { AppUser, Gender } from '../../generated/prisma/client';
 import type { UpdateProfileDto } from './dto/profile.dto';
 import type { ActivatePatientProfileDto } from './dto/activate-profile.dto';
@@ -191,6 +192,10 @@ export class PatientPortalService {
     if (!v) throw new NotFoundException('Visit not found');
     return {
       ...this.toVisitSummary(v),
+      // The plain-language AI after-visit summary, if one was generated (ai-features.md #6). Read
+      // unscoped here because the patient owns their record; the row is scoped to the visit +
+      // patient. Only a `ready` row is surfaced — pending/failed shows nothing.
+      aiSummary: await this.patientSummary(patientId, visitId),
       // The doctor's clinical record for this visit (Part C/D).
       vitals: v.vitals,
       symptoms: v.symptoms,
@@ -212,6 +217,22 @@ export class PatientPortalService {
         result: t.result,
       })),
     };
+  }
+
+  /**
+   * The patient's plain-language after-visit summary for this visit, or null if none is ready.
+   * The stored `output` is re-validated (it was written by another process, possibly an older
+   * prompt) so a row that no longer parses degrades to null rather than breaking the page.
+   */
+  private async patientSummary(patientId: string, visitId: string) {
+    const row = await this.prisma.aiGeneration.findFirst({
+      where: { visitId, patientId, kind: 'patient_summary', status: 'ready' },
+      select: { output: true, updatedAt: true },
+    });
+    if (!row) return null;
+    const parsed = patientSummarySchema.safeParse(row.output);
+    if (!parsed.success) return null;
+    return { ...parsed.data, generatedAt: row.updatedAt };
   }
 
   private toVisitSummary(v: {

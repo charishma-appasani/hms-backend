@@ -230,6 +230,20 @@ export class InfrastructureStack extends cdk.Stack {
         resources: ['*'],
       }),
     );
+    // AI assist inference (docs/architecture/ai-features.md). BOTH ARN shapes are required when
+    // invoking through a cross-region inference profile: the profile itself, plus the underlying
+    // foundation model with a WILDCARD region — the profile may route the request to any region
+    // it spans, and without the second statement that call fails with AccessDeniedException.
+    // Scope these to the specific profile/model ids once AI_SUMMARY_MODEL_ID is pinned per env.
+    taskRole.addToPolicy(
+      new iam.PolicyStatement({
+        actions: ['bedrock:InvokeModel'],
+        resources: [
+          `arn:aws:bedrock:${this.region}:${this.account}:inference-profile/*`,
+          'arn:aws:bedrock:*::foundation-model/*',
+        ],
+      }),
+    );
     // Staff invite / patient provisioning against the pool.
     taskRole.addToPolicy(
       new iam.PolicyStatement({
@@ -404,6 +418,15 @@ export class InfrastructureStack extends cdk.Stack {
         // also set NOTIFICATIONS_EMAIL_FROM, SMS_SENDER_ID, SMS_DLT_ENTITY_ID. Until then → stubs.
         NOTIFICATIONS_ENABLED: 'true',
         NOTIFICATIONS_EMAIL_FROM: 'no-reply@aayufy.com',
+        // AI assist. ENABLED with Option A (chosen 2026-07-27): current Claude via the `global.`
+        // inference profile, invoked from ap-south-2 (verified working). TRADE-OFF ACCEPTED:
+        // `global.` routes inference worldwide, so PHI can leave India — a DPDP decision the
+        // product owner made deliberately (see docs/architecture/ai-features.md §residency).
+        // To revert to the in-India older model instead: set AI_SUMMARY_MODEL_ID to
+        // anthropic.claude-3-haiku-20240307-v1:0 and BEDROCK_REGION to ap-south-1.
+        AI_ENABLED: 'true',
+        AI_SUMMARY_MODEL_ID: 'global.anthropic.claude-haiku-4-5-20251001-v1:0',
+        // AI_CHART_MODEL_ID unset → falls back to the summary model.
         // Non-secret DB connection details straight from the RDS instance.
         DATABASE_HOST: database.instanceEndpoint.hostname,
         DATABASE_PORT: '5432',

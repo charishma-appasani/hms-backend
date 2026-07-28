@@ -73,5 +73,6 @@ function toResponse(m: Medicine) {
     ingredients: m.ingredients,
     form: m.form,
     strength: m.strength,
+    drugClass: m.drugClass,
   };
 }

@@ -77,4 +77,20 @@ export const TENANT_MODELS: Record<string, TenantModelMeta> = {
     createdBy: false,
     updatedBy: false,
   },
+  // Cached AI output (advisory, not clinical record) — org-scoped, no soft delete; regeneration
+  // overwrites in place. See docs/architecture/ai-features.md.
+  AiGeneration: {
+    org: true,
+    softDelete: false,
+    createdBy: true,
+    updatedBy: true,
+  },
+  // Ask-this-chart Q&A log — append-only, org-scoped, no soft delete. Feedback updates set the
+  // feedback_by column explicitly (no updated_by column on this table).
+  AiChartQuery: {
+    org: true,
+    softDelete: false,
+    createdBy: true,
+    updatedBy: false,
+  },
 };

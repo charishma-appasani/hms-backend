@@ -22,6 +22,9 @@ roles, and the same human can be staff at one org and a patient elsewhere.
 | Advance visit status (in-consult → completed → …) | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Record vitals / clinical note / prescriptions / tests | ✅ | ✅ | ✅ | — | ✅ |
 | Record patient conditions & allergies | ✅ | ✅ | ✅ | — | ✅ |
+| View / regenerate / rate the AI patient summary | ✅ | ✅ | ✅ | — | ✅ |
+| Prescription safety check (pre-submit) | ✅ | ✅ | ✅ | — | ✅ |
+| Ask-this-chart (NL Q&A over the record) | ✅ | ✅ | ✅ | — | ✅ |
 | Manage availability templates & blocks (doctor schedules) | ✅ any provider | ✅ own only | — | — | — |
 | Manage practices | ✅ | — | — | — | — |
 | Manage staff (add/edit/remove) | ✅ | — | — | — | — |

@@ -34,6 +34,31 @@ export const envSchema = z.object({
   NOTIFICATIONS_EMAIL_FROM: z.email().optional(), // a verified SES sender identity
   SMS_SENDER_ID: z.string().optional(), // DLT-registered sender ID (India)
   SMS_DLT_ENTITY_ID: z.string().optional(), // DLT principal-entity ID (India)
+  // AI assist (see docs/architecture/ai-features.md). Disabled by default → deterministic stub
+  // provider, so local/CI never call Bedrock. Set AI_ENABLED=true in deployed environments.
+  AI_ENABLED: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((v) => v === 'true'),
+  // Inference region. Defaults to AWS_REGION; override when Anthropic models are not invocable
+  // from the app's region (ap-south-2 → ap-south-1). Must stay in India for DPDP residency.
+  BEDROCK_REGION: z.string().optional(),
+  // The inference profile / model id for the visit summary. NO DEFAULT on purpose: ids are
+  // region- and account-specific and change over time. Resolve the real value with
+  // `aws bedrock list-inference-profiles --region <region>`. Use an `apac.` geographic profile,
+  // never `global.` — a global profile may route PHI outside India.
+  AI_SUMMARY_MODEL_ID: z.string().optional(),
+  // Model for ask-this-chart Q&A. Optional — falls back to AI_SUMMARY_MODEL_ID when unset.
+  AI_CHART_MODEL_ID: z.string().optional(),
+}).superRefine((env, ctx) => {
+  // Fail at boot rather than at the first patient check-in.
+  if (env.AI_ENABLED && !env.AI_SUMMARY_MODEL_ID) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['AI_SUMMARY_MODEL_ID'],
+      message: 'is required when AI_ENABLED=true',
+    });
+  }
 });
 
 export type Env = z.infer<typeof envSchema>;

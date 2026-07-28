@@ -69,3 +69,23 @@ as the app). Do **not** run migrations from the long-running app container on bo
 1. Add it to `envSchema` in `src/config/env.schema.ts` (with type + default if optional).
 2. Add it to `.env.example`.
 3. For deployed envs, add it to the secret/parameter and the task definition.
+
+## AI assist
+
+| Var | Default | Notes |
+| --- | --- | --- |
+| `AI_ENABLED` | `false` | `false` selects a deterministic offline provider — local/CI never call Bedrock |
+| `BEDROCK_REGION` | falls back to `AWS_REGION` | Override only for the in-India older-model option (`ap-south-1`); current models work from ap-south-2 directly |
+| `AI_SUMMARY_MODEL_ID` | *(none)* | **Required when `AI_ENABLED=true`** — the schema refuses to boot otherwise |
+| `AI_CHART_MODEL_ID` | falls back to `AI_SUMMARY_MODEL_ID` | Model for ask-this-chart Q&A; set only if it should differ from the summary model |
+
+`AI_SUMMARY_MODEL_ID` deliberately has no default: inference profile ids are region- and
+account-specific and change over time, so a hardcoded value would fail at the first patient
+check-in instead of at boot.
+
+**Residency reality (verified 2026-07-27):** current Claude models in the India regions are
+`global.`-profile only (no `apac.` profile exists for them), and `global.` routes worldwide —
+so a current model means PHI can leave India. `global.anthropic.claude-haiku-4-5-20251001-v1:0`
+is verified working from ap-south-2. Staying in-India means the older `claude-3-haiku-20240307`
+on-demand from ap-south-1, or Provisioned Throughput. This is a DPDP decision — see the full
+table in ai-features.md (§Region, model id, and the data-residency decision).

@@ -8,6 +8,10 @@ import {
 import { ScopedPrismaService } from '../../prisma/scoped-prisma.service';
 import { dayWindowUtc } from '../../common/datetime';
 import { nextSequence } from '../../common/sequence';
+import { AiGenerationService } from '../../ai/ai-generation.service';
+import { PrescriptionSafetyService } from '../../ai/prescription-safety.service';
+import { PatientSummaryService } from '../../ai/patient-summary.service';
+import { AuditService } from '../../audit/audit.service';
 import type {
   Prisma,
   Visit,
@@ -53,7 +57,13 @@ const CHECKABLE = ['confirmed', 'checked_in'];
 export class VisitsService {
   private readonly logger = new Logger(VisitsService.name);
 
-  constructor(private readonly scoped: ScopedPrismaService) {}
+  constructor(
+    private readonly scoped: ScopedPrismaService,
+    private readonly ai: AiGenerationService,
+    private readonly safety: PrescriptionSafetyService,
+    private readonly patientSummaries: PatientSummaryService,
+    private readonly audit: AuditService,
+  ) {}
 
   async checkIn(appointmentId: string) {
     const orgId = this.scoped.orgId;
@@ -115,6 +125,10 @@ export class VisitsService {
     this.logger.log(
       `Visit checked in: visit=${visit.id} visitNumber=${visit.visitNumber} appointment=${appointmentId} patient=${visit.patientId} token=${visit.tokenNumber}`,
     );
+    // Pre-generate the doctor's patient summary now, so it's ready by the time the consultation
+    // starts (minutes later) instead of costing seconds of dead time then. Fire-and-forget and
+    // best-effort by contract — it never delays or fails the check-in. See ai-features.md.
+    this.ai.prewarmVisitSummary(visit.id);
     return toResponse(visit);
   }
 
@@ -244,6 +258,11 @@ export class VisitsService {
     this.logger.log(
       `Visit status changed: visit=${id} ${previousStatus} -> ${dto.status} patient=${visit.patientId}`,
     );
+    // Completing the visit generates the patient-facing after-visit summary (and notifies the
+    // patient). Fire-and-forget after commit — best-effort, never delays or fails completion.
+    if (dto.status === 'completed') {
+      this.patientSummaries.prewarm(id);
+    }
     return toResponse(visit);
   }
 
@@ -263,12 +282,34 @@ export class VisitsService {
   /** Add a prescription line to a visit. */
   async addPrescription(visitId: string, dto: CreatePrescriptionDto) {
     await this.assertVisit(visitId);
+    // Deterministic allergy/duplicate check (prescription-safety.ts). Warn-never-block: the
+    // line is created regardless; warnings ride back on the response and are AUDITED, so the
+    // record shows the doctor prescribed with the warning displayed. Best-effort: a check
+    // failure must not stop a prescription.
+    const warnings = await this.safety
+      .checkForVisit(visitId, dto.drug)
+      .catch((err: unknown) => {
+        this.logger.warn(
+          `Prescription safety check failed for visit=${visitId}: ${err instanceof Error ? err.message : String(err)}`,
+        );
+        return [];
+      });
     // orgId is re-injected by the scoped client at runtime; passed here only to satisfy the type.
     const created = await this.scoped.db.prescription.create({
       data: { orgId: this.scoped.orgId, visitId, ...dto },
     });
-    this.logger.log(`Prescription added: id=${created.id} visit=${visitId}`);
-    return created;
+    this.logger.log(
+      `Prescription added: id=${created.id} visit=${visitId} warnings=${warnings.length}`,
+    );
+    if (warnings.length > 0) {
+      await this.audit.record({
+        action: 'prescription.warning_shown',
+        entityType: 'prescription',
+        entityId: created.id,
+        metadata: { visitId, drug: dto.drug, warnings },
+      });
+    }
+    return { ...created, warnings };
   }
 
   async removePrescription(

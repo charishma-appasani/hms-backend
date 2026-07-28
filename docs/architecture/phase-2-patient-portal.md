@@ -80,6 +80,17 @@ a structured **clinical note** per visit (vitals, symptoms, diagnosis, prescript
   `ClinicalRecordDialog` ("Print prescription") and the patient's visit detail. The staff `GET /visits/:id`
   was enriched with org/practice/provider **names** for the header.
 
+### Part E — AI after-visit summary  ✅ BUILT (2026-07-27)
+
+- Generated when a doctor completes a visit (fire-and-forget, best-effort); rewrites the doctor's record
+  (diagnosis/notes/prescriptions/tests) into plain language a patient can act on. Rephrase-only — adds
+  nothing unrecorded. English for now. Stored in `ai_generation` kind `patient_summary`.
+- `GET /me/visits/:id` returns `aiSummary` ({summary, medications[], nextSteps[], generatedAt}) when a
+  `ready` row exists (unscoped-by-patient read; only surfaces `ready`). Rendered as a highlighted card
+  ABOVE the clinical detail on the patient visit detail page.
+- A best-effort notification (SES/SNS via NotificationService) points the patient to the portal — a
+  POINTER only, no clinical detail in the message. See ai-features.md #6.
+
 ## Build order & rationale
 
 **A → B → C → D.** A is independent and immediately useful (patients see their own data). B turns it into a

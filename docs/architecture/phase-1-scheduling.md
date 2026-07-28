@@ -139,6 +139,7 @@ src/
   scheduling/     # availability templates, exceptions, slot generation, availability query
   appointments/   # booking, reschedule, cancel
   visits/         # check-in, OP token queue, visit lifecycle, vitals
+  ai/             # patient dossier + cached visit summary (Bedrock / offline stub)
   shared/         # numbering service, audit interceptor, pino logger
 ```
 
@@ -227,6 +228,32 @@ PATCH  /visits/:id/vitals                  vitals (JSON) + notes  [built]
        # checked_in → in_consultation → completed (completing fulfils the appointment).
        # visit# = gapless per-practice counter (number_sequence, INSERT…ON CONFLICT +1).
        # One visit per appointment. queue date filters on check-in time (practice-local day).
+       # check-in also fires a fire-and-forget AI patient-summary pre-generation (best-effort,
+       # never delays or fails the check-in) — see ai-features.md.
+
+# AI assist  (docs/architecture/ai-features.md)
+GET    /ai/visits/:visitId/summary                  dossier + narrative, cached  [built]
+POST   /ai/visits/:visitId/summary/regenerate       force a fresh generation (30s cooldown → 429)  [built]
+POST   /ai/generations/:id/feedback                 doctor thumbs up/down  [built]
+POST   /ai/prescription-check                       deterministic allergy/duplicate check  [built]
+       # NO model — token+class matching vs patient_condition + medicine.drug_class. Called
+       # (debounced) as the doctor types; POST /visits/:id/prescriptions re-runs it, returns
+       # warnings with the line, and audits `prescription.warning_shown`. Warns, never blocks.
+POST   /ai/visits/:visitId/ask                       ask-this-chart: grounded NL Q&A  [built]
+GET    /ai/patients/:patientId/chart-queries         recent questions (panel history)  [built]
+POST   /ai/chart-queries/:id/feedback                thumbs up/down  [built]
+       # On-demand model call (cost only when asked); dossier INCLUDES the current visit; answer
+       # is grounded + cited, foundInRecord flags "not in record". Append-only ai_chart_query +
+       # audit_log ai.chart.query. Model failure → 503 (synchronous, user-facing).
+       # PATIENT AFTER-VISIT SUMMARY (ai-features.md #6): no dedicated route — generated on the
+       # visit `completed` transition (fire-and-forget), stored as ai_generation kind
+       # patient_summary, surfaced via the PATIENT PORTAL GET /me/visits/:id (aiSummary) +
+       # a best-effort pointer notification.
+       # Normally a cache hit: the summary was generated at check-in. The response always
+       # carries the deterministic dossier (rendered as fact) even when generation failed.
+       # Cost guards: dossier excludes the current visit (stable hash while the doctor edits);
+       # empty-record patients get a code-written summary (model_id='deterministic', no
+       # inference); regenerate cooldown skips ready rows younger than 30s (failed rows exempt).
 ```
 
 All tenant routes run behind: `JwtAuthGuard (sets orgId/practiceId on request) → RbacGuard`.
