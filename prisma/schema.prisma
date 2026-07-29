@@ -49,6 +49,7 @@ enum UserRole {
 enum PlatformRole {
   super_admin // onboard/manage orgs, bootstrap org admins, full platform control
   support // read/assist; no destructive ops
+  data_entry // master-data curator: the medicine catalog only, nothing tenant-facing
 }
 
 enum AvailabilityMode {

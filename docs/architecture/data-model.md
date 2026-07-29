@@ -175,9 +175,11 @@ CREATE INDEX medicine_name_idx ON medicine (name);
 
 > `medicine` is **GLOBAL and platform-curated** (no `org_id`): one master catalog feeds the
 > prescription autocomplete at every org (`GET /medicines?q=`, org members). Master-data entry is
-> super_admin-only under `/platform/medicines` (a data-entry UI is a future platform page — the
-> endpoints work via curl/import until then). Prescriptions stay **free text** — the catalog is a
-> typing aid, never a constraint.
+> `super_admin` + the `data_entry` operator role under `/platform/medicines` — browse/search
+> (paged), CRUD, and CSV bulk import, driven by the platform console's Medicines page
+> (`support` may read). Mutations are audited (`medicine.create|update|delete|import`) with no
+> `org_id`, since the rows are global. Prescriptions stay **free text** — the catalog is a typing
+> aid, never a constraint.
 
 ## 5. Tenant layer (every table has `org_id`)
 

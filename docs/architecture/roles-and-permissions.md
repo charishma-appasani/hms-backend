@@ -2,7 +2,8 @@
 
 Two independent axes (see [`auth-and-authz.md`](./auth-and-authz.md)):
 
-- **Platform roles** (`app_user.platform_role`, our own staff): `super_admin`, `support`.
+- **Platform roles** (`app_user.platform_role`, our own staff): `super_admin`, `support`,
+  `data_entry` (added 2026-07-28).
 - **Org roles** (`staff.roles[]`, per membership): today `admin`, `doctor`, `doctor_assistant`
   (added 2026-07-19, UNSCOPED — see below), `front_desk`, `nurse`.
 
@@ -44,6 +45,22 @@ shows write actions only to admins or to a doctor viewing their own schedule (do
 
 Platform: `super_admin` creates/edits/deletes orgs (and can assume-org to onboard a first admin);
 `support` is read-only on orgs.
+
+### Platform-role matrix
+
+| Capability | super_admin | support | data_entry |
+| --- | :-: | :-: | :-: |
+| Organizations: read | ✅ | ✅ | — |
+| Organizations: create / edit / approve / delete | ✅ | — | — |
+| Platform users: read | ✅ | ✅ | — |
+| Platform users: invite / revoke | ✅ | — | — |
+| Medicine catalog: read (`GET /platform/medicines`) | ✅ | ✅ | ✅ |
+| Medicine catalog: create / edit / remove / CSV import | ✅ | — | ✅ |
+
+`data_entry` is a deliberately narrow master-data curator: the medicine catalog is its ONLY surface.
+It holds no org role and no assume-org power, so it never touches tenant or patient data. The UI
+matches — the platform shell hides Organizations/Platform users from it, `platformRoleGuard` blocks
+those routes, and `/platform` lands it straight on Medicines.
 
 ### Known rough edges (to reconcile when we revisit)
 

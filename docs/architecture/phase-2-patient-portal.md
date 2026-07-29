@@ -175,8 +175,9 @@ prescriptions to this visit"** — repeat-prescription in one click). Non-clinic
 - **Master medicine catalog** (`medicine` table, GLOBAL/platform-curated — data-model.md §4):
   `GET /medicines?q=` (org members) powers an **autocomplete on the prescription drug field**
   (debounced, ≥ 2 chars; picking a suggestion fills the drug and prefills dosage from strength —
-  prescriptions stay free text). Master-data entry is `/platform/medicines` (super_admin);
-  **TODO: a platform data-entry page** for a catalog-curation platform user.
+  prescriptions stay free text). Master-data entry is `/platform/medicines` — DONE 2026-07-28:
+  the platform console's **Medicines page** (paged search, CRUD, CSV bulk import) plus a new
+  `data_entry` platform role whose only surface is that page (roles-and-permissions.md).
 - **Vitals trends** — `GET /visits/by-patient/:patientId` now returns each visit's `vitals`; the
   Vitals card contains a **collapsed "History & trends" section** (doctor opens it on demand)
   with per-metric sparklines (BP split into systolic/diastolic, pulse, SpO₂, temp, weight; ≥ 2

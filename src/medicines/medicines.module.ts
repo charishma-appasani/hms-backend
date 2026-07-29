@@ -4,13 +4,14 @@ import {
   PlatformMedicinesController,
 } from './medicines.controller';
 import { MedicinesService } from './medicines.service';
+import { MedicineCatalogService } from './medicine-catalog.service';
 
 /**
- * Master medicine catalog: org-facing autocomplete search (`GET /medicines`) + platform-operator
- * master-data entry (`/platform/medicines`, data-entry UI is a future page). PrismaModule is global.
+ * Master medicine catalog: org-facing autocomplete search (`GET /medicines`) + the platform
+ * data-entry console (`/platform/medicines`: browse, CRUD, CSV import). PrismaModule is global.
  */
 @Module({
   controllers: [MedicinesController, PlatformMedicinesController],
-  providers: [MedicinesService],
+  providers: [MedicinesService, MedicineCatalogService],
 })
 export class MedicinesModule {}
