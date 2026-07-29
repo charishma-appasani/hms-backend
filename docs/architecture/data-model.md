@@ -173,6 +173,13 @@ CREATE TABLE medicine (                     -- master medicine catalog (2026-07-
 CREATE INDEX medicine_name_idx ON medicine (name);
 ```
 
+> **Entity pictures (2026-07-29)** — `organization`, `practice`, `medicine` and `app_user` each
+> gained a nullable `image_updated_at`, and `patient` an `id_card_updated_at`. Non-null means an
+> object exists at that entity's FIXED S3 key (`org/<id>/logo`, `user/<id>/avatar`, …) and the
+> value is the cache-busting version. There is deliberately no key column — the key is derived
+> from the id, which is what guarantees one picture per entity. See
+> [asset-storage.md](./asset-storage.md).
+
 > `medicine` is **GLOBAL and platform-curated** (no `org_id`): one master catalog feeds the
 > prescription autocomplete at every org (`GET /medicines?q=`, org members). Master-data entry is
 > `super_admin` + the `data_entry` operator role under `/platform/medicines` — browse/search

@@ -49,7 +49,11 @@ export class PatientSummaryService {
       where: { id: visitId },
       include: {
         practice: { select: { org: { select: { name: true } } } },
-        patient: { select: { user: { select: { firstName: true, email: true, phone: true } } } },
+        patient: {
+          select: {
+            user: { select: { firstName: true, email: true, phone: true } },
+          },
+        },
         prescriptions: { orderBy: { createdAt: 'asc' } },
         testOrders: { orderBy: { createdAt: 'asc' } },
       },
@@ -70,7 +74,10 @@ export class PatientSummaryService {
         duration: p.duration,
         instructions: p.instructions,
       })),
-      tests: visit.testOrders.map((t) => ({ name: t.name, instructions: t.instructions })),
+      tests: visit.testOrders.map((t) => ({
+        name: t.name,
+        instructions: t.instructions,
+      })),
     };
     const inputHash = hashJson(input);
 
@@ -79,7 +86,8 @@ export class PatientSummaryService {
       select: { id: true, status: true, inputHash: true },
     });
     // Idempotent: a completed row for the same record needs no second call.
-    if (existing?.status === 'ready' && existing.inputHash === inputHash) return;
+    if (existing?.status === 'ready' && existing.inputHash === inputHash)
+      return;
 
     const claim = {
       status: 'pending' as const,
@@ -93,7 +101,10 @@ export class PatientSummaryService {
       latencyMs: null,
     };
     const row = existing
-      ? await this.scoped.db.aiGeneration.update({ where: { id: existing.id }, data: claim })
+      ? await this.scoped.db.aiGeneration.update({
+          where: { id: existing.id },
+          data: claim,
+        })
       : await this.scoped.db.aiGeneration.create({
           data: {
             orgId: this.scoped.orgId,
@@ -147,7 +158,11 @@ export class PatientSummaryService {
       await this.scoped.db.aiGeneration
         .update({
           where: { id: row.id },
-          data: { status: 'failed', error: message.slice(0, 500), latencyMs: Date.now() - startedAt },
+          data: {
+            status: 'failed',
+            error: message.slice(0, 500),
+            latencyMs: Date.now() - startedAt,
+          },
         })
         .catch(() => undefined);
     }
@@ -168,7 +183,9 @@ export class PatientSummaryService {
       });
     } catch (err) {
       // dispatch is already best-effort per channel; guard the whole call too.
-      this.logger.warn(`Patient summary notification failed: ${errorText(err)}`);
+      this.logger.warn(
+        `Patient summary notification failed: ${errorText(err)}`,
+      );
     }
   }
 }

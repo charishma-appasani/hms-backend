@@ -131,7 +131,13 @@ export class AiGenerationService {
       );
     }
 
-    return this.generate(visit.id, visit.patientId, dossier, inputHash, existing?.id);
+    return this.generate(
+      visit.id,
+      visit.patientId,
+      dossier,
+      inputHash,
+      existing?.id,
+    );
   }
 
   /** Record a doctor's thumbs up/down. This is the evaluation signal — see the doc. */

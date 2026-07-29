@@ -116,10 +116,45 @@ const CROSS_REACTIVE: Record<string, string[]> = {
 
 /** Tokens that carry no drug identity (units, forms, strengths). */
 const STOP_TOKENS = new Set([
-  'mg', 'mcg', 'ml', 'gm', 'iu', 'tab', 'tabs', 'tablet', 'tablets', 'cap', 'caps',
-  'capsule', 'capsules', 'syrup', 'syp', 'injection', 'inj', 'cream', 'gel', 'drops',
-  'drop', 'ointment', 'suspension', 'forte', 'plus', 'and', 'with', 'of', 'the', 'dsr',
-  'sr', 'er', 'xr', 'od', 'bd', 'allergy', 'allergic', 'drugs', 'drug',
+  'mg',
+  'mcg',
+  'ml',
+  'gm',
+  'iu',
+  'tab',
+  'tabs',
+  'tablet',
+  'tablets',
+  'cap',
+  'caps',
+  'capsule',
+  'capsules',
+  'syrup',
+  'syp',
+  'injection',
+  'inj',
+  'cream',
+  'gel',
+  'drops',
+  'drop',
+  'ointment',
+  'suspension',
+  'forte',
+  'plus',
+  'and',
+  'with',
+  'of',
+  'the',
+  'dsr',
+  'sr',
+  'er',
+  'xr',
+  'od',
+  'bd',
+  'allergy',
+  'allergic',
+  'drugs',
+  'drug',
 ]);
 
 /** Lowercase word tokens with variants normalized; numbers, units and short noise dropped. */
@@ -134,7 +169,10 @@ export function drugTokens(text: string | null | undefined): Set<string> {
 }
 
 /** All identity tokens of a drug: what was typed plus its catalog row's name/generic/composition. */
-function identityTokens(drug: string, catalog?: CatalogEntry | null): Set<string> {
+function identityTokens(
+  drug: string,
+  catalog?: CatalogEntry | null,
+): Set<string> {
   const tokens = drugTokens(drug);
   if (catalog) {
     for (const t of drugTokens(catalog.name)) tokens.add(t);
@@ -206,7 +244,9 @@ export function checkPrescriptionSafety(
 
     // Tier 2b — partial cross-reactivity, lower severity.
     for (const cls of classes) {
-      const related = (CROSS_REACTIVE[cls] ?? []).find((r) => classTokens.has(r));
+      const related = (CROSS_REACTIVE[cls] ?? []).find((r) =>
+        classTokens.has(r),
+      );
       if (related) {
         warnings.push({
           type: 'allergy_conflict',
@@ -236,5 +276,7 @@ export function checkPrescriptionSafety(
   }
 
   // Urgent first — the UI shows these in order.
-  return warnings.sort((a, b) => (a.severity === b.severity ? 0 : a.severity === 'urgent' ? -1 : 1));
+  return warnings.sort((a, b) =>
+    a.severity === b.severity ? 0 : a.severity === 'urgent' ? -1 : 1,
+  );
 }

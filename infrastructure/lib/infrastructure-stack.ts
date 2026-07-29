@@ -164,6 +164,71 @@ export class InfrastructureStack extends cdk.Stack {
       },
     });
 
+    // ──────────── S3 (entity images — see docs/architecture/asset-storage.md) ────────────
+    // Browser origins allowed to PUT/POST directly to S3 with a presigned policy, and to GET the
+    // result. Must match main.ts's CORS list — the same SPA origins drive both.
+    const browserOrigins = [
+      'https://aayufy.com',
+      'https://dev.aayufy.com',
+      'http://localhost:4200',
+    ];
+    const imageCors: s3.CorsRule[] = [
+      {
+        allowedOrigins: browserOrigins,
+        allowedMethods: [s3.HttpMethods.PUT, s3.HttpMethods.POST, s3.HttpMethods.GET],
+        allowedHeaders: ['*'],
+        exposedHeaders: ['ETag'],
+        maxAge: 3000,
+      },
+    ];
+
+    // NON-sensitive imagery (org logos, practice photos, medicine photos): CDN-served under a
+    // stable URL so it caches, prints, and can be embedded. OAC-locked — reachable only through
+    // CloudFront, never via the bucket directly.
+    const publicAssetsBucket = new s3.Bucket(this, 'PublicAssetsBucket', {
+      removalPolicy: RemovalPolicy.DESTROY,
+      autoDeleteObjects: true,
+      encryption: s3.BucketEncryption.S3_MANAGED,
+      blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
+      cors: imageCors,
+    });
+
+    // Objects are overwritten in place at a fixed key, so the app appends `?v=<epoch>` to bust the
+    // cache. The managed CACHING_OPTIMIZED policy STRIPS query strings, which would serve a
+    // replaced logo stale for the whole TTL — hence a policy that keys on the query string.
+    const assetCachePolicy = new cloudfront.CachePolicy(this, 'AssetCachePolicy', {
+      queryStringBehavior: cloudfront.CacheQueryStringBehavior.all(),
+      headerBehavior: cloudfront.CacheHeaderBehavior.none(),
+      cookieBehavior: cloudfront.CacheCookieBehavior.none(),
+      defaultTtl: Duration.days(30),
+      maxTtl: Duration.days(365),
+      minTtl: Duration.seconds(0),
+      enableAcceptEncodingGzip: true,
+      enableAcceptEncodingBrotli: true,
+    });
+
+    const publicAssetsCdn = new cloudfront.Distribution(this, 'PublicAssetsCdn', {
+      defaultBehavior: {
+        origin: origins.S3BucketOrigin.withOriginAccessControl(publicAssetsBucket),
+        viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+        cachePolicy: assetCachePolicy,
+        originRequestPolicy: cloudfront.OriginRequestPolicy.CORS_S3_ORIGIN,
+        responseHeadersPolicy: cloudfront.ResponseHeadersPolicy.CORS_ALLOW_ALL_ORIGINS,
+      },
+    });
+
+    // PERSONAL imagery (staff/patient avatars, patient ID-card scans). NO CloudFront: every read
+    // goes through a short-lived presigned GET the API issues after an authorization check, so a
+    // leaked key alone grants nothing lasting.
+    const privateImagesBucket = new s3.Bucket(this, 'PrivateImagesBucket', {
+      // RETAIN: these are patient/staff personal data — a stack mistake must not delete them.
+      removalPolicy: RemovalPolicy.RETAIN,
+      encryption: s3.BucketEncryption.S3_MANAGED,
+      blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
+      enforceSSL: true,
+      cors: imageCors,
+    });
+
     // ─────────────────────── Cognito ───────────────────────
     // Single shared pool for ALL users. Roles live in our DB (staff.roles / platform_role),
     // NOT in Cognito — so no custom role attributes here.
@@ -208,6 +273,10 @@ export class InfrastructureStack extends cdk.Stack {
       assumedBy: new iam.ServicePrincipal('ecs-tasks.amazonaws.com'),
     });
     documentsBucket.grantReadWrite(taskRole);
+    // Entity images: the API presigns browser uploads and deletes replaced objects, so it needs
+    // write as well as read on both image buckets.
+    publicAssetsBucket.grantReadWrite(taskRole);
+    privateImagesBucket.grantReadWrite(taskRole);
     taskRole.addToPolicy(
       new iam.PolicyStatement({
         actions: [
@@ -428,6 +497,13 @@ export class InfrastructureStack extends cdk.Stack {
         AI_ENABLED: 'true',
         AI_SUMMARY_MODEL_ID: 'global.anthropic.claude-haiku-4-5-20251001-v1:0',
         // AI_CHART_MODEL_ID unset → falls back to the summary model.
+        // Entity images (docs/architecture/asset-storage.md). Enabled here because the buckets are part
+        // of this stack; locally IMAGES_ENABLED defaults to false → uploads 503 and every image
+        // URL is null, so dev/CI never touch S3.
+        IMAGES_ENABLED: 'true',
+        PUBLIC_ASSETS_BUCKET: publicAssetsBucket.bucketName,
+        PUBLIC_ASSETS_CDN_DOMAIN: publicAssetsCdn.distributionDomainName,
+        PRIVATE_IMAGES_BUCKET: privateImagesBucket.bucketName,
         // Non-secret DB connection details straight from the RDS instance.
         DATABASE_HOST: database.instanceEndpoint.hostname,
         DATABASE_PORT: '5432',
@@ -535,6 +611,15 @@ export class InfrastructureStack extends cdk.Stack {
     });
     new cdk.CfnOutput(this, 'CloudFrontDomain', {
       value: distribution.distributionDomainName,
+    });
+    new cdk.CfnOutput(this, 'PublicAssetsBucketName', {
+      value: publicAssetsBucket.bucketName,
+    });
+    new cdk.CfnOutput(this, 'PublicAssetsCdnDomain', {
+      value: publicAssetsCdn.distributionDomainName,
+    });
+    new cdk.CfnOutput(this, 'PrivateImagesBucketName', {
+      value: privateImagesBucket.bucketName,
     });
     // Set this as the GitHub Actions repo variable AWS_DEPLOY_ROLE_ARN (used by aws.yml OIDC).
     new cdk.CfnOutput(this, 'GithubDeployRoleArn', {

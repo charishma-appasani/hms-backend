@@ -147,6 +147,10 @@ model AppUser {
   gender        Gender?
   status        Status        @default(active)
   platformRole  PlatformRole? @map("platform_role") // set only for our own operators
+  // Profile photo marker: non-null ⇒ an object exists at `user/<id>/avatar` in the PRIVATE image
+  // bucket, and its value is the cache-busting version. One object per person, overwritten in
+  // place. See docs/architecture/asset-storage.md.
+  imageUpdatedAt DateTime?    @map("image_updated_at") @db.Timestamptz
   updatedByOrg  String?       @map("updated_by_org") @db.Uuid // cross-org demographic attribution
   updatedByUser String?       @map("updated_by_user") @db.Uuid
   createdAt     DateTime      @default(now()) @map("created_at") @db.Timestamptz
@@ -164,6 +168,9 @@ model Patient {
   abhaNumber  String?  @unique @map("abha_number") @db.VarChar(17)
   abhaAddress String?  @unique @map("abha_address") @db.VarChar(64)
   isVerified  Boolean  @default(false) @map("is_verified")
+  // ID / insurance-card scan marker (PRIVATE bucket, `patient/<id>/id-card`). Separate from the
+  // avatar on app_user: different purpose, different sensitivity, its own delete.
+  idCardUpdatedAt DateTime? @map("id_card_updated_at") @db.Timestamptz
   createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz
   updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz
 
@@ -215,9 +222,9 @@ model PatientCondition {
 }
 
 // Master medicine catalog (GLOBAL, platform-curated — no org): feeds the prescription
-// autocomplete on the consultation page. Maintained by platform operators via
-// /platform/medicines (a data-entry UI is a future page; the endpoints work via curl/import
-// until then). Prescriptions stay free text — picking a suggestion just fills the fields.
+// autocomplete on the consultation page. Maintained by platform operators on the console's
+// Medicines page (/platform/medicines: search, CRUD, CSV import; super_admin + data_entry).
+// Prescriptions stay free text — picking a suggestion just fills the fields.
 model Medicine {
   id           String    @id @default(uuid(7)) @db.Uuid
   name         String    @db.VarChar(200) // brand/trade name (what doctors type)
@@ -230,6 +237,9 @@ model Medicine {
   // Free text normalized in code against DRUG_CLASSES (e.g. 'penicillins', 'sulfonamides',
   // 'nsaids'). Nullable: rows without a class still get tier-1 token matching.
   drugClass    String?   @map("drug_class") @db.VarChar(80)
+  // Pack/strip photo marker (CDN bucket, `medicine/<id>/photo`) — helps staff confirm the right
+  // brand at dispensing time.
+  imageUpdatedAt DateTime? @map("image_updated_at") @db.Timestamptz
   createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz
   updatedAt    DateTime  @updatedAt @map("updated_at") @db.Timestamptz
   deletedAt    DateTime? @map("deleted_at") @db.Timestamptz
@@ -267,6 +277,8 @@ model Organization {
   uhidFormat String    @default("UH{seq:08}") @map("uhid_format") @db.VarChar(64)
   settings   Json      @default("{}")
   approvedAt DateTime? @map("approved_at") @db.Timestamptz // null = awaiting platform approval; gates public directory visibility + patient self-booking
+  // Logo marker (CDN bucket, `org/<id>/logo`): non-null ⇒ an object exists, value = cache version.
+  imageUpdatedAt DateTime? @map("image_updated_at") @db.Timestamptz
   approvedBy String?   @map("approved_by") @db.Uuid // platform operator who approved (operator-created orgs are approved at creation)
   createdAt  DateTime  @default(now()) @map("created_at") @db.Timestamptz
   updatedAt  DateTime  @updatedAt @map("updated_at") @db.Timestamptz
@@ -303,6 +315,8 @@ model Practice {
   addressId String?   @unique @map("address_id") @db.Uuid // → address (1:1; nested-managed)
   timezone  String    @default("Asia/Kolkata") @db.VarChar(40)
   status    Status    @default(active)
+  // Branch photo marker (CDN bucket, `practice/<id>/photo`).
+  imageUpdatedAt DateTime? @map("image_updated_at") @db.Timestamptz
   createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz
   updatedAt DateTime  @updatedAt @map("updated_at") @db.Timestamptz
   createdBy String?   @map("created_by") @db.Uuid

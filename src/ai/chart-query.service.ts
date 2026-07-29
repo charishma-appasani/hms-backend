@@ -121,7 +121,10 @@ export class ChartQueryService {
   }
 
   /** This patient's recent questions at this org (newest first) — the panel's history. */
-  async listForPatient(patientId: string, limit = 20): Promise<ChartQueryResult[]> {
+  async listForPatient(
+    patientId: string,
+    limit = 20,
+  ): Promise<ChartQueryResult[]> {
     const rows = await this.scoped.db.aiChartQuery.findMany({
       where: { patientId },
       orderBy: { createdAt: 'desc' },

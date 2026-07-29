@@ -9,6 +9,7 @@ import { ScopedPrismaService } from '../prisma/scoped-prisma.service';
 import { CognitoService } from '../auth/cognito.service';
 import { OtpService } from '../otp/otp.service';
 import { AuditService, diffFields } from '../audit/audit.service';
+import { ImagesService } from '../images/images.service';
 import { throwMappedPrismaError } from '../common/prisma-errors';
 import { nextSequence } from '../common/sequence';
 import { formatUhid } from '../common/uhid';
@@ -51,6 +52,7 @@ export class PatientsService {
     private readonly cognito: CognitoService,
     private readonly otp: OtpService,
     private readonly audit: AuditService,
+    private readonly images: ImagesService,
   ) {}
 
   // ───────────────────────── staff ─────────────────────────
@@ -120,7 +122,7 @@ export class PatientsService {
       this.logger.log(
         `Patient registered by staff: patientId=${patient.id} uhid=${registration.uhid} org=${orgId} actor=${actorId}`,
       );
-      return toPatientResponse(user, patient, registration);
+      return toPatientResponse(user, patient, registration, this.images);
     } catch (err) {
       this.logger.warn(
         `Patient staff-registration failed for org=${orgId} actor=${actorId}: ${String(err)}`,
@@ -162,7 +164,11 @@ export class PatientsService {
         include: { patient: { include: { user: true } } },
       })
       .then((rows) =>
-        rows.map((r) => toPatientResponse(r.patient.user, r.patient, r)),
+        Promise.all(
+          rows.map((r) =>
+            toPatientResponse(r.patient.user, r.patient, r, this.images),
+          ),
+        ),
       );
   }
 
@@ -180,6 +186,7 @@ export class PatientsService {
       registration.patient.user,
       registration.patient,
       registration,
+      this.images,
     );
   }
 
@@ -268,7 +275,7 @@ export class PatientsService {
           `Patient updated: patientId=${patientId} org=${orgId} actor=${actorId} fields=[${Object.keys(changes).join(',')}]`,
         );
       }
-      return toPatientResponse(user, patient, registration);
+      return toPatientResponse(user, patient, registration, this.images);
     } catch (err) {
       return throwMappedPrismaError(err, {
         conflict: 'A patient with this ABHA number already exists',
@@ -556,7 +563,7 @@ export class PatientsService {
     this.logger.log(
       `Patient linked to org: patientId=${patient.id} uhid=${registration.uhid} org=${orgId} registration=${registration.id}`,
     );
-    return toPatientResponse(patient.user, patient, registration);
+    return toPatientResponse(patient.user, patient, registration, this.images);
   }
 }
 
@@ -572,11 +579,21 @@ function toConditionResponse(c: PatientCondition) {
   };
 }
 
-function toPatientResponse(
+/**
+ * `images` resolves the two pictures a patient can have: their profile photo (on the shared
+ * app_user, so it follows them across orgs) and their ID / insurance card scan (on the patient
+ * row). Both are presigned — never CDN — because they are personal data.
+ */
+async function toPatientResponse(
   user: AppUser,
   patient: Patient,
   registration: PatientRegistration | null,
+  images: ImagesService,
 ) {
+  const [imageUrl, idCardUrl] = await Promise.all([
+    images.urlFor('user', user.id, user.imageUpdatedAt),
+    images.urlFor('patient-id-card', patient.id, patient.idCardUpdatedAt),
+  ]);
   return {
     patientId: patient.id,
     userId: user.id,
@@ -588,6 +605,8 @@ function toPatientResponse(
     gender: user.gender,
     abhaNumber: patient.abhaNumber,
     isVerified: patient.isVerified,
+    imageUrl,
+    idCardUrl,
     registration: registration
       ? { uhid: registration.uhid, status: registration.status }
       : null,

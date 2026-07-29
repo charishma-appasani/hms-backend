@@ -1,4 +1,11 @@
-import { Body, Controller, Get, Param, ParseUUIDPipe, Post } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  Param,
+  ParseUUIDPipe,
+  Post,
+} from '@nestjs/common';
 import { Roles } from '../auth/roles.decorator';
 import { ZodValidationPipe } from '../common/zod-validation.pipe';
 import { AiGenerationService } from './ai-generation.service';
@@ -38,7 +45,8 @@ export class AiController {
   @Post('prescription-check')
   @Roles(...CLINICAL)
   async checkPrescription(
-    @Body(new ZodValidationPipe(prescriptionCheckSchema)) dto: PrescriptionCheckDto,
+    @Body(new ZodValidationPipe(prescriptionCheckSchema))
+    dto: PrescriptionCheckDto,
   ) {
     return {
       warnings: await this.safety.checkForVisit(dto.visitId, dto.drug),

@@ -1,6 +1,7 @@
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
+import { ImagesService } from '../images/images.service';
 import { throwMappedPrismaError } from '../common/prisma-errors';
 import { formatDateOnly, parseDateOnly } from '../common/datetime';
 import { patientSummarySchema } from '../ai/patient-summary.schema';
@@ -17,7 +18,8 @@ const PROVIDER_SELECT = {
 const PRACTICE_SELECT = {
   name: true,
   timezone: true,
-  org: { select: { id: true, name: true } },
+  // imageUpdatedAt → the org logo on the patient's printable prescription.
+  org: { select: { id: true, name: true, imageUpdatedAt: true } },
 } as const;
 
 function providerName(p: {
@@ -40,6 +42,7 @@ export class PatientPortalService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
+    private readonly images: ImagesService,
   ) {}
 
   /**
@@ -192,6 +195,12 @@ export class PatientPortalService {
     if (!v) throw new NotFoundException('Visit not found');
     return {
       ...this.toVisitSummary(v),
+      // Letterhead for the patient's own printable copy of the prescription.
+      orgLogoUrl: await this.images.urlFor(
+        'org',
+        v.practice.org.id,
+        v.practice.org.imageUpdatedAt,
+      ),
       // The plain-language AI after-visit summary, if one was generated (ai-features.md #6). Read
       // unscoped here because the patient owns their record; the row is scoped to the visit +
       // patient. Only a `ready` row is surfaced — pending/failed shows nothing.
@@ -242,7 +251,10 @@ export class PatientPortalService {
     status: string;
     checkInAt: Date;
     completedAt: Date | null;
-    practice: { name: string; org: { name: string } };
+    practice: {
+      name: string;
+      org: { id: string; name: string; imageUpdatedAt: Date | null };
+    };
     provider: {
       specialty: string | null;
       user: { firstName: string; lastName: string | null };

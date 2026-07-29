@@ -1,5 +1,6 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { ImagesService } from '../images/images.service';
 import { dayWindowUtc } from '../common/datetime';
 
 /**
@@ -10,7 +11,10 @@ import { dayWindowUtc } from '../common/datetime';
  */
 @Injectable()
 export class DirectoryService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly images: ImagesService,
+  ) {}
 
   /** Active, platform-APPROVED orgs, optionally filtered by name. */
   async orgs(q?: string) {
@@ -21,11 +25,16 @@ export class DirectoryService {
         approvedAt: { not: null }, // self-signed-up orgs are hidden until approved
         ...(q ? { name: { contains: q, mode: 'insensitive' } } : {}),
       },
-      select: { id: true, name: true },
+      select: { id: true, name: true, imageUpdatedAt: true },
       orderBy: { name: 'asc' },
       take: 50,
     });
-    return rows;
+    return Promise.all(
+      rows.map(async ({ imageUpdatedAt, ...org }) => ({
+        ...org,
+        logoUrl: await this.images.urlFor('org', org.id, imageUpdatedAt),
+      })),
+    );
   }
 
   /** One org with its active practices + doctors (for the patient to pick a branch + provider). */
@@ -37,7 +46,7 @@ export class DirectoryService {
         status: 'active',
         approvedAt: { not: null },
       },
-      select: { id: true, name: true },
+      select: { id: true, name: true, imageUpdatedAt: true },
     });
     if (!org) throw new NotFoundException('Organization not found');
 
@@ -48,6 +57,7 @@ export class DirectoryService {
           id: true,
           name: true,
           timezone: true,
+          imageUpdatedAt: true,
           address: { select: { city: true } },
         },
         orderBy: { name: 'asc' },
@@ -63,26 +73,52 @@ export class DirectoryService {
           id: true,
           specialty: true,
           consultationFee: true,
-          user: { select: { firstName: true, lastName: true } },
+          user: {
+            select: {
+              id: true,
+              firstName: true,
+              lastName: true,
+              imageUpdatedAt: true,
+            },
+          },
         },
         orderBy: { createdAt: 'asc' },
       }),
     ]);
 
+    // Pictures: the org logo and branch photos come from the CDN; a doctor's face is personal
+    // data, so it is presigned like every other avatar.
+    const [logoUrl, practiceImages, providerImages] = await Promise.all([
+      this.images.urlFor('org', org.id, org.imageUpdatedAt),
+      Promise.all(
+        practices.map((p) =>
+          this.images.urlFor('practice', p.id, p.imageUpdatedAt),
+        ),
+      ),
+      Promise.all(
+        doctors.map((d) =>
+          this.images.urlFor('user', d.user.id, d.user.imageUpdatedAt),
+        ),
+      ),
+    ]);
+
     return {
       id: org.id,
       name: org.name,
-      practices: practices.map((p) => ({
+      logoUrl,
+      practices: practices.map((p, i) => ({
         id: p.id,
         name: p.name,
         timezone: p.timezone,
         city: p.address?.city ?? null,
+        imageUrl: practiceImages[i],
       })),
-      providers: doctors.map((d) => ({
+      providers: doctors.map((d, i) => ({
         id: d.id,
         name: `${d.user.firstName} ${d.user.lastName ?? ''}`.trim(),
         specialty: d.specialty,
         consultationFee: d.consultationFee ? Number(d.consultationFee) : null,
+        imageUrl: providerImages[i],
       })),
     };
   }

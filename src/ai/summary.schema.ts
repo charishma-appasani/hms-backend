@@ -22,7 +22,11 @@ export const visitSummarySchema = z.object({
         severity: z.enum(['info', 'attention', 'urgent']).default('info'),
         // The model is asked to cite, but an uncited highlight is not worth failing the whole
         // generation over — the UI renders it differently instead.
-        cite: z.string().max(80).nullish().transform((v) => v ?? null),
+        cite: z
+          .string()
+          .max(80)
+          .nullish()
+          .transform((v) => v ?? null),
       }),
     )
     .max(8)

@@ -87,7 +87,9 @@ export class DossierService {
       where: {
         patientId,
         checkInAt: { gte: since },
-        ...(options.excludeVisitId ? { id: { not: options.excludeVisitId } } : {}),
+        ...(options.excludeVisitId
+          ? { id: { not: options.excludeVisitId } }
+          : {}),
       },
       orderBy: { checkInAt: 'desc' },
       take: DOSSIER_VISIT_LIMIT,
@@ -203,8 +205,7 @@ export function hashJson(value: unknown): string {
 
 function canonicalise(value: unknown): string {
   if (value === null || typeof value !== 'object') return JSON.stringify(value);
-  if (Array.isArray(value))
-    return `[${value.map(canonicalise).join(',')}]`;
+  if (Array.isArray(value)) return `[${value.map(canonicalise).join(',')}]`;
   const entries = Object.entries(value as Record<string, unknown>)
     .filter(([, v]) => v !== undefined)
     .sort(([a], [b]) => a.localeCompare(b))
@@ -237,7 +238,10 @@ function ageInYears(dob: Date | null): number | null {
   const now = new Date();
   let age = now.getUTCFullYear() - dob.getUTCFullYear();
   const monthDelta = now.getUTCMonth() - dob.getUTCMonth();
-  if (monthDelta < 0 || (monthDelta === 0 && now.getUTCDate() < dob.getUTCDate()))
+  if (
+    monthDelta < 0 ||
+    (monthDelta === 0 && now.getUTCDate() < dob.getUTCDate())
+  )
     age -= 1;
   return age >= 0 ? age : null;
 }

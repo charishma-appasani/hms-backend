@@ -1,7 +1,8 @@
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService, diffFields } from '../audit/audit.service';
-import { toMedicineResponse } from './medicine.mapper';
+import { ImagesService } from '../images/images.service';
+import { toMedicineResponse, toMedicineResponses } from './medicine.mapper';
 import type {
   CreateMedicineDto,
   ImportMedicinesDto,
@@ -44,6 +45,7 @@ export class MedicineCatalogService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
+    private readonly images: ImagesService,
   ) {}
 
   /** Paged browse with an optional contains-filter (name / generic / manufacturer / ingredients). */
@@ -72,7 +74,7 @@ export class MedicineCatalogService {
       this.prisma.medicine.count({ where }),
     ]);
     return {
-      rows: rows.map(toMedicineResponse),
+      rows: await toMedicineResponses(rows, this.images),
       total,
       page: dto.page,
       pageSize: dto.pageSize,
@@ -88,7 +90,7 @@ export class MedicineCatalogService {
       entityId: created.id,
       metadata: { name: created.name },
     });
-    return toMedicineResponse(created);
+    return toMedicineResponse(created, this.images);
   }
 
   async update(id: string, dto: UpdateMedicineDto) {
@@ -109,7 +111,7 @@ export class MedicineCatalogService {
         changes: diffFields(pick(existing), dto),
       },
     });
-    return toMedicineResponse(updated);
+    return toMedicineResponse(updated, this.images);
   }
 
   /** Soft delete — the catalog row disappears from search but prescriptions that quoted it stand. */

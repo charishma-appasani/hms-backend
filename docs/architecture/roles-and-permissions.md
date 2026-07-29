@@ -62,6 +62,15 @@ It holds no org role and no assume-org power, so it never touches tenant or pati
 matches — the platform shell hides Organizations/Platform users from it, `platformRoleGuard` blocks
 those routes, and `/platform` lands it straight on Medicines.
 
+### Entity pictures (2026-07-29)
+
+`/images/:target/:id` has its own deny-by-default rules rather than `@Roles`, because the targets
+span both axes (an org logo is org-scoped, a medicine photo is platform-scoped, an avatar is
+personal). The matrix lives in [asset-storage.md](./asset-storage.md#authorization); the two rules
+worth remembering here are that **a person may always change their own avatar**, and that setting
+someone ELSE's photo requires acting inside an org they belong to — an `admin` for staff, or the
+patient-editing roles (`admin`/`front_desk`/`nurse`) for a registered patient.
+
 ### Known rough edges (to reconcile when we revisit)
 
 - The "front-desk" set is **not consistent**: `nurse` can register patients and check in, but **cannot

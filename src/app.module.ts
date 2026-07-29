@@ -23,6 +23,7 @@ import { AppointmentsModule } from './scheduling/appointments/appointments.modul
 import { VisitsModule } from './scheduling/visits/visits.module';
 import { ScheduleExceptionsModule } from './scheduling/exceptions/schedule-exceptions.module';
 import { MedicinesModule } from './medicines/medicines.module';
+import { ImagesModule } from './images/images.module';
 import { AiModule } from './ai/ai.module';
 
 @Module({
@@ -50,6 +51,7 @@ import { AiModule } from './ai/ai.module';
     VisitsModule,
     ScheduleExceptionsModule,
     MedicinesModule,
+    ImagesModule,
     AiModule,
   ],
   controllers: [AppController, ConfigController],

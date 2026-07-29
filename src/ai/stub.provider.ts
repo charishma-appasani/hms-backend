@@ -54,7 +54,9 @@ export class StubAiProvider implements AiProvider {
           : [],
         openThreads: dossier.tests
           .filter((t) => t.status !== 'resulted' && t.status !== 'cancelled')
-          .map((t) => `Test '${t.name}' ordered ${t.date} has no recorded result.`),
+          .map(
+            (t) => `Test '${t.name}' ordered ${t.date} has no recorded result.`,
+          ),
       },
       usage: { modelId: 'stub' },
     });
@@ -78,16 +80,22 @@ export class StubAiProvider implements AiProvider {
     const scan = (text: string | null, cite: string, label: string) => {
       if (!text) return;
       const hay = text.toLowerCase();
-      if (terms.some((t) => hay.includes(t))) hits.push({ text: `${label}: ${text}`, cite });
+      if (terms.some((t) => hay.includes(t)))
+        hits.push({ text: `${label}: ${text}`, cite });
     };
 
     for (const a of dossier.allergies) scan(a.name, a.cite, 'Allergy');
     for (const c of dossier.conditions) scan(c.name, c.cite, 'Condition');
-    for (const m of dossier.medications) scan(m.drug, m.cite, `Medication (${m.date})`);
+    for (const m of dossier.medications)
+      scan(m.drug, m.cite, `Medication (${m.date})`);
     for (const t of dossier.tests)
       scan(`${t.name} ${t.result ?? ''}`, t.cite, `Test (${t.date})`);
     for (const v of dossier.visits)
-      scan(`${v.diagnosis ?? ''} ${v.symptoms ?? ''} ${v.notes ?? ''}`, v.cite, `Visit ${v.visitNumber}`);
+      scan(
+        `${v.diagnosis ?? ''} ${v.symptoms ?? ''} ${v.notes ?? ''}`,
+        v.cite,
+        `Visit ${v.visitNumber}`,
+      );
 
     const found = hits.length > 0;
     return Promise.resolve({
@@ -125,7 +133,9 @@ export class StubAiProvider implements AiProvider {
             .join(' — '),
         ),
         nextSteps: input.tests.map((t) =>
-          t.instructions ? `${t.name} (${t.instructions})` : `Get this test done: ${t.name}`,
+          t.instructions
+            ? `${t.name} (${t.instructions})`
+            : `Get this test done: ${t.name}`,
         ),
       },
       usage: { modelId: 'stub' },

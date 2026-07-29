@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import { toMedicineResponse } from './medicine.mapper';
+import { ImagesService } from '../images/images.service';
+import { toMedicineResponses } from './medicine.mapper';
 import type { SearchMedicinesDto } from './dto/medicine.dto';
 
 /**
@@ -12,7 +13,10 @@ import type { SearchMedicinesDto } from './dto/medicine.dto';
  */
 @Injectable()
 export class MedicinesService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly images: ImagesService,
+  ) {}
 
   /** Contains-search over brand name, generic name, and ingredients (case-insensitive). */
   async search(dto: SearchMedicinesDto) {
@@ -28,6 +32,6 @@ export class MedicinesService {
       orderBy: { name: 'asc' },
       take: dto.limit,
     });
-    return rows.map(toMedicineResponse);
+    return toMedicineResponses(rows, this.images);
   }
 }

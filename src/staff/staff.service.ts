@@ -3,6 +3,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { ScopedPrismaService } from '../prisma/scoped-prisma.service';
 import { CognitoService } from '../auth/cognito.service';
 import { AuditService } from '../audit/audit.service';
+import { ImagesService } from '../images/images.service';
 import { throwMappedPrismaError } from '../common/prisma-errors';
 import type { CreateStaffDto, UpdateStaffDto } from './dto/staff.dto';
 
@@ -13,6 +14,7 @@ const USER_SELECT = {
   lastName: true,
   email: true,
   phone: true,
+  imageUpdatedAt: true, // → resolved to `imageUrl` by withImage
 } as const;
 
 /**
@@ -30,7 +32,28 @@ export class StaffService {
     private readonly scoped: ScopedPrismaService,
     private readonly cognito: CognitoService,
     private readonly audit: AuditService,
+    private readonly images: ImagesService,
   ) {}
+
+  /**
+   * Attach the person's presigned avatar URL. The photo hangs off the global app_user, so the
+   * same doctor shows the same face at every org they work at.
+   */
+  private async withImage<
+    T extends { user: { id: string; imageUpdatedAt: Date | null } },
+  >(staff: T) {
+    return {
+      ...staff,
+      user: {
+        ...staff.user,
+        imageUrl: await this.images.urlFor(
+          'user',
+          staff.user.id,
+          staff.user.imageUpdatedAt,
+        ),
+      },
+    };
+  }
 
   async create(dto: CreateStaffDto) {
     const userId = await this.resolveAppUser(dto);
@@ -56,7 +79,7 @@ export class StaffService {
       this.logger.log(
         `Staff added: id=${staff.id} user=${userId} org=${this.scoped.orgId} roles=[${dto.roles.join(',')}]`,
       );
-      return staff;
+      return this.withImage(staff);
     } catch (err) {
       this.logger.warn(
         `Staff creation failed for user=${userId} org=${this.scoped.orgId}: ${String(err)}`,
@@ -67,11 +90,12 @@ export class StaffService {
     }
   }
 
-  list() {
-    return this.scoped.db.staff.findMany({
+  async list() {
+    const staff = await this.scoped.db.staff.findMany({
       orderBy: { createdAt: 'desc' },
       include: { user: { select: USER_SELECT } },
     });
+    return Promise.all(staff.map((s) => this.withImage(s)));
   }
 
   async get(id: string) {
@@ -80,7 +104,7 @@ export class StaffService {
       include: { user: { select: USER_SELECT } },
     });
     if (!staff) throw new NotFoundException('Staff member not found');
-    return staff;
+    return this.withImage(staff);
   }
 
   update(id: string, dto: UpdateStaffDto) {
@@ -90,6 +114,7 @@ export class StaffService {
         data: dto,
         include: { user: { select: USER_SELECT } },
       })
+      .then((updated) => this.withImage(updated))
       .catch((err: unknown) =>
         throwMappedPrismaError(err, { notFound: 'Staff member not found' }),
       );

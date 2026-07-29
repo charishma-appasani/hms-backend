@@ -27,7 +27,8 @@ export type PatientVisitSummary = z.infer<typeof patientSummarySchema>;
 export const PATIENT_SUMMARY_TOOL: Tool = {
   toolSpec: {
     name: PATIENT_SUMMARY_TOOL_NAME,
-    description: "Record the plain-language after-visit summary shown to the patient.",
+    description:
+      'Record the plain-language after-visit summary shown to the patient.',
     inputSchema: {
       json: {
         type: 'object',

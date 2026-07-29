@@ -190,7 +190,9 @@ export class BedrockAiProvider implements AiProvider {
           {
             role: 'user',
             content: [
-              { text: `Doctor's visit record:\n\n${JSON.stringify(input, null, 2)}` },
+              {
+                text: `Doctor's visit record:\n\n${JSON.stringify(input, null, 2)}`,
+              },
             ],
           },
         ],

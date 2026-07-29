@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { ImagesService } from '../images/images.service';
 import { formatDateOnly } from '../common/datetime';
 import type { AuthenticatedUser } from './auth.types';
 
@@ -20,6 +21,8 @@ export interface MeResponse {
     dateOfBirth: string | null;
     gender: string | null;
     platformRole: string | null;
+    /** Presigned avatar URL, or null when they have no photo (see images.md). */
+    imageUrl: string | null;
   };
   memberships: Array<{
     orgId: string;
@@ -30,13 +33,18 @@ export interface MeResponse {
     status: string;
     /** False while a self-signed-up org awaits platform approval (not patient-visible yet). */
     orgApproved: boolean;
+    /** Org logo (CDN URL) — the staff shell header brands itself with this. */
+    orgLogoUrl: string | null;
   }>;
   hasPatientProfile: boolean;
 }
 
 @Injectable()
 export class AuthService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly images: ImagesService,
+  ) {}
 
   async getMe(auth: AuthenticatedUser): Promise<MeResponse> {
     const { user } = auth;
@@ -45,13 +53,29 @@ export class AuthService {
       this.prisma.staff.findMany({
         where: { userId: user.id, deletedAt: null },
         include: {
-          org: { select: { id: true, name: true, approvedAt: true } },
+          org: {
+            select: {
+              id: true,
+              name: true,
+              approvedAt: true,
+              imageUpdatedAt: true,
+            },
+          },
         },
       }),
       this.prisma.patient.findUnique({
         where: { userId: user.id },
         select: { id: true },
       }),
+    ]);
+
+    const [avatarUrl, logoUrls] = await Promise.all([
+      this.images.urlFor('user', user.id, user.imageUpdatedAt),
+      Promise.all(
+        memberships.map((m) =>
+          this.images.urlFor('org', m.org.id, m.org.imageUpdatedAt),
+        ),
+      ),
     ]);
 
     return {
@@ -64,14 +88,16 @@ export class AuthService {
         dateOfBirth: user.dateOfBirth ? formatDateOnly(user.dateOfBirth) : null,
         gender: user.gender,
         platformRole: user.platformRole,
+        imageUrl: avatarUrl,
       },
-      memberships: memberships.map((m) => ({
+      memberships: memberships.map((m, i) => ({
         orgId: m.org.id,
         orgName: m.org.name,
         staffId: m.id,
         roles: m.roles,
         status: m.status,
         orgApproved: m.org.approvedAt !== null,
+        orgLogoUrl: logoUrls[i],
       })),
       hasPatientProfile: patient !== null,
     };

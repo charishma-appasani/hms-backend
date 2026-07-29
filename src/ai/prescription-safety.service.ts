@@ -35,7 +35,10 @@ export class PrescriptionSafetyService {
     private readonly prisma: PrismaService,
   ) {}
 
-  async checkForVisit(visitId: string, drug: string): Promise<PrescriptionWarning[]> {
+  async checkForVisit(
+    visitId: string,
+    drug: string,
+  ): Promise<PrescriptionWarning[]> {
     const visit = await this.scoped.db.visit.findFirst({
       where: { id: visitId },
       select: { id: true, patientId: true },
@@ -91,7 +94,9 @@ export class PrescriptionSafetyService {
     ]);
     const catalog = new Map<string, CatalogEntry | null>();
     await Promise.all(
-      [...texts].map(async (text) => catalog.set(text, await this.resolveCatalog(text))),
+      [...texts].map(async (text) =>
+        catalog.set(text, await this.resolveCatalog(text)),
+      ),
     );
 
     return checkPrescriptionSafety(
@@ -110,7 +115,10 @@ export class PrescriptionSafetyService {
     const trimmed = text.trim();
     if (!trimmed) return null;
     const byName = await this.prisma.medicine.findFirst({
-      where: { deletedAt: null, name: { equals: trimmed, mode: 'insensitive' } },
+      where: {
+        deletedAt: null,
+        name: { equals: trimmed, mode: 'insensitive' },
+      },
       select: CATALOG_SELECT,
     });
     if (byName) return byName;

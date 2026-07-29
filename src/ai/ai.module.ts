@@ -40,6 +40,10 @@ import type { Env } from '../config/env.schema';
   ],
   // Exported so VisitsModule can pre-generate at check-in, safety-check on add-prescription, and
   // generate the patient summary on completion.
-  exports: [AiGenerationService, PrescriptionSafetyService, PatientSummaryService],
+  exports: [
+    AiGenerationService,
+    PrescriptionSafetyService,
+    PatientSummaryService,
+  ],
 })
 export class AiModule {}

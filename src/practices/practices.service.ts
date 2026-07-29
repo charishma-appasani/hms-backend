@@ -1,5 +1,6 @@
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { ScopedPrismaService } from '../prisma/scoped-prisma.service';
+import { ImagesService } from '../images/images.service';
 import { throwMappedPrismaError } from '../common/prisma-errors';
 import type { CreatePracticeDto, UpdatePracticeDto } from './dto/practice.dto';
 
@@ -12,7 +13,24 @@ import type { CreatePracticeDto, UpdatePracticeDto } from './dto/practice.dto';
 export class PracticesService {
   private readonly logger = new Logger(PracticesService.name);
 
-  constructor(private readonly scoped: ScopedPrismaService) {}
+  constructor(
+    private readonly scoped: ScopedPrismaService,
+    private readonly images: ImagesService,
+  ) {}
+
+  /** Attach the branch photo's CDN URL (null when it has none). */
+  private async withImage<
+    T extends { id: string; imageUpdatedAt: Date | null },
+  >(practice: T): Promise<T & { imageUrl: string | null }> {
+    return {
+      ...practice,
+      imageUrl: await this.images.urlFor(
+        'practice',
+        practice.id,
+        practice.imageUpdatedAt,
+      ),
+    };
+  }
 
   create(dto: CreatePracticeDto) {
     const { address, ...practice } = dto;
@@ -33,7 +51,7 @@ export class PracticesService {
         this.logger.log(
           `Practice created: id=${created.id} code=${created.code} org=${this.scoped.orgId}`,
         );
-        return created;
+        return this.withImage(created);
       })
       .catch((err: unknown) =>
         throwMappedPrismaError(err, {
@@ -42,11 +60,12 @@ export class PracticesService {
       );
   }
 
-  list() {
-    return this.scoped.db.practice.findMany({
+  async list() {
+    const practices = await this.scoped.db.practice.findMany({
       orderBy: { createdAt: 'desc' },
       include: { address: true },
     });
+    return Promise.all(practices.map((p) => this.withImage(p)));
   }
 
   async get(id: string) {
@@ -56,7 +75,7 @@ export class PracticesService {
       include: { address: true },
     });
     if (!practice) throw new NotFoundException('Practice not found');
-    return practice;
+    return this.withImage(practice);
   }
 
   update(id: string, dto: UpdatePracticeDto) {
@@ -88,6 +107,7 @@ export class PracticesService {
           include: { address: true },
         });
       })
+      .then((updated) => this.withImage(updated))
       .catch((err: unknown) =>
         throwMappedPrismaError(err, {
           notFound: 'Practice not found',

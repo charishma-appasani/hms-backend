@@ -14,10 +14,7 @@ export const chartAnswerSchema = z.object({
   // false = the record does not contain what was asked. The model must not guess; it says so.
   foundInRecord: z.boolean(),
   // Dossier cite ids the answer drew on (`visit:V000012`, `medication:<id>`, `test:<id>`, …).
-  citations: z
-    .array(z.string().max(80))
-    .max(12)
-    .default([]),
+  citations: z.array(z.string().max(80)).max(12).default([]),
 });
 
 export type ChartAnswer = z.infer<typeof chartAnswerSchema>;
@@ -25,7 +22,8 @@ export type ChartAnswer = z.infer<typeof chartAnswerSchema>;
 export const CHART_ANSWER_TOOL: Tool = {
   toolSpec: {
     name: CHART_ANSWER_TOOL_NAME,
-    description: "Answer the clinician's question about this patient, grounded in the dossier.",
+    description:
+      "Answer the clinician's question about this patient, grounded in the dossier.",
     inputSchema: {
       json: {
         type: 'object',
