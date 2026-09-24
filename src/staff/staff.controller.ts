@@ -8,6 +8,7 @@ import {
   ParseUUIDPipe,
   Patch,
   Post,
+  Query,
   UseGuards,
 } from '@nestjs/common';
 import { Roles } from '../auth/roles.decorator';
@@ -45,10 +46,11 @@ export class StaffController {
     return this.staff.create(dto);
   }
 
+  /** `?includeRemoved=true` also returns soft-deleted memberships (admin screen, for re-activation). */
   @Get()
   @Roles(...ORG_MEMBER)
-  list() {
-    return this.staff.list();
+  list(@Query('includeRemoved') includeRemoved?: string) {
+    return this.staff.list(includeRemoved === 'true');
   }
 
   @Get(':id')
@@ -66,10 +68,32 @@ export class StaffController {
     return this.staff.update(id, dto);
   }
 
+  @Post(':id/disable')
+  @UseGuards(StaffManageGuard)
+  @HttpCode(200)
+  disable(@Param('id', ParseUUIDPipe) id: string) {
+    return this.staff.disable(id);
+  }
+
+  /** Re-activates a disabled or removed (soft-deleted) membership. */
+  @Post(':id/activate')
+  @UseGuards(StaffManageGuard)
+  @HttpCode(200)
+  activate(@Param('id', ParseUUIDPipe) id: string) {
+    return this.staff.activate(id);
+  }
+
+  /** Upcoming bookings a removal would cancel (for the confirmation dialog). */
+  @Get(':id/removal-impact')
+  @UseGuards(StaffManageGuard)
+  removalImpact(@Param('id', ParseUUIDPipe) id: string) {
+    return this.staff.removalImpact(id);
+  }
+
+  /** Removes the member AND cancels their upcoming appointments (patients are notified). */
   @Delete(':id')
   @UseGuards(StaffManageGuard)
-  @HttpCode(204)
-  remove(@Param('id', ParseUUIDPipe) id: string): Promise<void> {
+  remove(@Param('id', ParseUUIDPipe) id: string) {
     return this.staff.remove(id);
   }
 }

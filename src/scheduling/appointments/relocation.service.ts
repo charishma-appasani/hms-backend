@@ -126,13 +126,9 @@ export class RelocationService {
         }
       }
 
-      await this.appointments.cancel(appt.id);
+      // cancel() notifies the patient itself (with our reason) — don't send a second message.
+      await this.appointments.cancel(appt.id, { reason: opts.reason });
       result.cancelled.push(appt.id);
-      await this.notify(recipient, {
-        kind: 'appointment_cancelled',
-        reason: opts.reason,
-        appointment: from,
-      });
     }
 
     return result;

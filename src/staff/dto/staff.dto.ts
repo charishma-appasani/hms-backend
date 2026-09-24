@@ -23,10 +23,12 @@ export const createStaffSchema = z.object({
   consultationFee: z.number().nonnegative().optional(),
 });
 
-/** Membership edits only — identity/demographics are changed on the app_user, not here. */
+/**
+ * Membership edits only — identity/demographics are changed on the app_user, not here. Status is
+ * NOT editable here: it changes only through the explicit disable / activate / delete actions.
+ */
 export const updateStaffSchema = z.object({
   roles: z.array(userRole).min(1).optional(),
-  status: z.enum(['active', 'disabled']).optional(),
   specialty: z.string().trim().max(120).optional(),
   registrationNumber: z.string().trim().max(64).optional(),
   consultationFee: z.number().nonnegative().optional(),

@@ -33,11 +33,12 @@ export class LoggingEmailChannel implements NotificationChannel {
     return Boolean(recipient.email);
   }
 
-  async send(
+  send(
     recipient: NotificationRecipient,
     message: NotificationMessage,
   ): Promise<void> {
     this.logger.log(`[stub] email → ${recipient.email}: ${message.subject}`);
+    return Promise.resolve();
   }
 }
 
@@ -54,10 +55,11 @@ export class LoggingSmsChannel implements NotificationChannel {
     return Boolean(recipient.phone);
   }
 
-  async send(
+  send(
     recipient: NotificationRecipient,
     message: NotificationMessage,
   ): Promise<void> {
     this.logger.log(`[stub] sms → ${recipient.phone}: ${message.subject}`);
+    return Promise.resolve();
   }
 }

@@ -254,8 +254,12 @@ export class AppointmentsService {
     };
   }
 
-  /** Cancel an active appointment and atomically release its seat back to the slot bucket. */
-  async cancel(id: string) {
+  /**
+   * Cancel an active appointment and atomically release its seat back to the slot bucket. This is
+   * the ONE place a staff-side cancellation notifies the patient; system-initiated cancels (schedule
+   * drop, provider removal) pass a `reason` so it appears in that same message.
+   */
+  async cancel(id: string, opts: { reason?: string } = {}) {
     const orgId = this.scoped.orgId;
     const { appointment, previousStatus } = await this.scoped.db.$transaction(
       async (tx) => {
@@ -293,6 +297,7 @@ export class AppointmentsService {
     );
     await this.notifications.notify(recipientOf(appointment), {
       kind: 'appointment_cancelled',
+      reason: opts.reason,
       appointment: {
         sessionDate: toResponse(appointment).sessionDate,
         tokenNumber: appointment.tokenNumber,

@@ -52,12 +52,34 @@ export class NotificationService {
   }
 }
 
+/**
+ * Patient-facing wording for the internal reason codes callers pass (schedule-change codes from
+ * the scheduling services, and schedule-exception types). Deliberately neutral: a doctor's
+ * surgery/time-off/busy block reads as "unavailable" — patients don't need the private detail.
+ * Unknown codes are dropped rather than shown raw.
+ */
+const REASON_TEXT: Record<string, string> = {
+  schedule_changed: "the doctor's schedule has changed",
+  schedule_removed: "the doctor's schedule has changed",
+  provider_removed: 'the doctor is no longer available at this clinic',
+  time_off: 'the doctor is unavailable at that time',
+  surgery: 'the doctor is unavailable at that time',
+  busy: 'the doctor is unavailable at that time',
+  holiday: 'of a holiday',
+};
+
+function becauseClause(event: NotificationEvent): string {
+  const code = 'reason' in event ? event.reason : undefined;
+  const text = code ? REASON_TEXT[code] : undefined;
+  return text ? ` because ${text}` : '';
+}
+
 function buildMessage(
   recipient: NotificationRecipient,
   event: NotificationEvent,
 ): NotificationMessage {
   const hi = `Dear ${recipient.name},`;
-  const because = 'reason' in event && event.reason ? ` (${event.reason})` : '';
+  const because = becauseClause(event);
   switch (event.kind) {
     case 'appointment_booked':
       return {

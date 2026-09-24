@@ -101,9 +101,9 @@ function scopeWhere(
 ): Record<string, unknown> {
   const scoped = { ...(where ?? {}) };
   if (meta.org) scoped.orgId = ctx.orgId;
-  // Respect an explicit deletedAt filter (e.g. a restore/admin query that opts in).
-  if (meta.softDelete && scoped.deletedAt === undefined)
-    scoped.deletedAt = null;
+  // Respect an explicit deletedAt key (e.g. a restore/admin query that opts in). Passing
+  // `deletedAt: undefined` explicitly means "live AND soft-deleted rows" (Prisma ignores undefined).
+  if (meta.softDelete && !('deletedAt' in scoped)) scoped.deletedAt = null;
   return scoped;
 }
 

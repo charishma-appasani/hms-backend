@@ -293,6 +293,66 @@ export class AvailabilityTemplatesService {
     return { templateId: id, ...relocation };
   }
 
+  /**
+   * What {@link retireProvider} would touch: the provider's upcoming active bookings (sessions not
+   * yet over). `checkedIn` patients are on site and won't be auto-cancelled.
+   */
+  async upcomingBookingCounts(
+    providerId: string,
+  ): Promise<{ appointments: number; checkedIn: number }> {
+    const rows = await this.scoped.db.appointment.groupBy({
+      by: ['status'],
+      where: {
+        providerId,
+        status: { in: [...ACTIVE_APPT] },
+        slot: { endAt: { gt: new Date() } },
+      },
+      _count: { _all: true },
+    });
+    const count = (s: string) =>
+      rows.find((r) => r.status === s)?._count._all ?? 0;
+    return {
+      appointments: count('requested') + count('confirmed'),
+      checkedIn: count('checked_in'),
+    };
+  }
+
+  /**
+   * RETIRE a provider leaving the org (staff removal): stop new bookings on their upcoming slots,
+   * cancel every upcoming booking (notifying each patient), delete the now-empty future slots and
+   * soft-delete their schedule. Checked-in patients are on site, so they're returned in
+   * `needsAttention` rather than cancelled. Past slots/appointments stay as history. Idempotent —
+   * safe to re-run if a previous attempt failed partway.
+   */
+  async retireProvider(providerId: string): Promise<RelocationResult> {
+    const now = new Date();
+    await this.scoped.db.slot.updateMany({
+      where: { providerId, endAt: { gt: now }, status: 'open' },
+      data: { status: 'blocked' },
+    });
+    const affected = await this.scoped.db.appointment.findMany({
+      where: {
+        providerId,
+        status: { in: [...ACTIVE_APPT] },
+        slot: { endAt: { gt: now } },
+      },
+      select: RELOCATABLE_SELECT,
+      orderBy: { slot: { startAt: 'asc' } },
+    });
+    const result = await this.relocation.relocate(affected, {
+      migrate: false,
+      reason: 'provider_removed',
+    });
+    await this.scoped.db.slot.deleteMany({
+      where: { providerId, startAt: { gte: now }, appointments: { none: {} } },
+    });
+    await this.scoped.db.availabilityTemplate.updateMany({
+      where: { providerId },
+      data: { deletedAt: new Date() },
+    });
+    return result;
+  }
+
   /** Create the given templates + their slots in ONE transaction (all land or none do). */
   private generateTemplates(
     specs: TemplateSpec[],

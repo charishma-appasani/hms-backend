@@ -8,5 +8,6 @@ import { AvailabilityTemplatesService } from './availability-templates.service';
   imports: [AppointmentsModule],
   controllers: [AvailabilityTemplatesController],
   providers: [AvailabilityTemplatesService],
+  exports: [AvailabilityTemplatesService], // staff removal retires the provider's schedule
 })
 export class AvailabilityTemplatesModule {}
