@@ -18,6 +18,10 @@ import type {
   Prisma,
 } from '../../../generated/prisma/client';
 import type { BookAppointmentDto, WalkInDto } from './dto/book-appointment.dto';
+import {
+  BOOKABLE_PROVIDER_SELECT,
+  assertProviderBookable,
+} from '../provider-bookable';
 
 /** Which slot capacity bucket a channel draws on. */
 export type Bucket = 'appt' | 'walkin';
@@ -113,10 +117,11 @@ export class AppointmentsService {
         startAt: true,
         walkinCapacity: true,
         practice: { select: { timezone: true } },
-        provider: { select: { userId: true } },
+        provider: { select: BOOKABLE_PROVIDER_SELECT },
       },
     });
     if (!slot) throw new NotFoundException('Slot not found');
+    assertProviderBookable(slot.provider);
 
     const registration = await this.scoped.db.patientRegistration.findFirst({
       where: { patientId, status: 'active' },
@@ -322,6 +327,7 @@ export class AppointmentsService {
         id: true,
         slotId: true,
         patientId: true,
+        providerId: true,
         channel: true,
         status: true,
         apptType: true,
@@ -359,10 +365,15 @@ export class AppointmentsService {
         mode: true,
         startAt: true,
         practice: { select: { timezone: true } },
-        provider: { select: { userId: true } },
+        provider: { select: BOOKABLE_PROVIDER_SELECT },
       },
     });
     if (!newSlot) throw new NotFoundException('Slot not found');
+    // Moving within the SAME doctor stays allowed (a disabled doctor keeps existing bookings, and
+    // block-relocation moves them within that doctor); moving TO another doctor needs them bookable.
+    if (newSlot.providerId !== old.providerId) {
+      assertProviderBookable(newSlot.provider);
+    }
     if (newSlot.provider.userId === old.patient.userId) {
       throw new BadRequestException(
         'The selected provider and patient are the same person',

@@ -1,6 +1,12 @@
 import { z } from 'zod';
 
-const userRole = z.enum(['admin', 'doctor', 'front_desk', 'nurse']);
+const userRole = z.enum([
+  'admin',
+  'doctor',
+  'doctor_assistant',
+  'front_desk',
+  'nurse',
+]);
 
 /**
  * Create-staff payload = identity (provisioned in Cognito + app_user if new) + the org membership.

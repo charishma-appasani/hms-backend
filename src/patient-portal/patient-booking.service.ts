@@ -14,6 +14,10 @@ import {
   reserveSeat,
   releaseSeat,
 } from '../scheduling/appointments/appointments.service';
+import {
+  BOOKABLE_PROVIDER_SELECT,
+  assertProviderBookable,
+} from '../scheduling/provider-bookable';
 import type { AppointmentStatus, Prisma } from '../../generated/prisma/client';
 import type { SelfBookDto } from './dto/directory.dto';
 import type { PatientContext } from './patient-context.guard';
@@ -59,7 +63,7 @@ export class PatientBookingService {
         mode: true,
         startAt: true,
         practice: { select: { timezone: true } },
-        provider: { select: { userId: true } },
+        provider: { select: BOOKABLE_PROVIDER_SELECT },
         org: { select: { uhidFormat: true, approvedAt: true } },
       },
     });
@@ -68,6 +72,8 @@ export class PatientBookingService {
     if (!slot.org.approvedAt) {
       throw new NotFoundException('Slot not found');
     }
+    // Disabled/removed doctors are hidden in the directory — also block deep-linked bookings.
+    assertProviderBookable(slot.provider);
     // Staff can be patients (same app_user), but a self-consultation is meaningless.
     if (slot.provider.userId === userId) {
       throw new BadRequestException(
@@ -202,6 +208,7 @@ export class PatientBookingService {
         id: true,
         slotId: true,
         orgId: true,
+        providerId: true,
         channel: true,
         status: true,
         apptType: true,
@@ -228,12 +235,17 @@ export class PatientBookingService {
         mode: true,
         startAt: true,
         practice: { select: { timezone: true } },
-        provider: { select: { userId: true } },
+        provider: { select: BOOKABLE_PROVIDER_SELECT },
         org: { select: { uhidFormat: true, approvedAt: true } },
       },
     });
     if (!newSlot) throw new NotFoundException('Slot not found');
     if (!newSlot.org.approvedAt) throw new NotFoundException('Slot not found');
+    // Same rule as staff-side reschedule: moving within the same doctor is fine; switching to
+    // another doctor requires them to be taking appointments.
+    if (newSlot.providerId !== old.providerId) {
+      assertProviderBookable(newSlot.provider);
+    }
     if (newSlot.provider.userId === userId) {
       throw new BadRequestException(
         'You cannot book an appointment with yourself as the provider',

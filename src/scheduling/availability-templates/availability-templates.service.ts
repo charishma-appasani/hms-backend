@@ -19,6 +19,7 @@ import {
 } from '../../common/datetime';
 import { slotRowsForTemplate } from '../slots/slot-generation';
 import { assertCanManageProviderSchedule } from '../provider-schedule-access';
+import { assertProviderBookable } from '../provider-bookable';
 import type { OrgContext } from '../../auth/auth.types';
 import type { AvailabilityTemplate } from '../../../generated/prisma/client';
 import type { CreateAvailabilityTemplateDto } from './dto/availability-template.dto';
@@ -526,7 +527,7 @@ export class AvailabilityTemplatesService {
       }),
       this.scoped.db.staff.findFirst({
         where: { id: providerId },
-        select: { id: true, roles: true },
+        select: { id: true, roles: true, status: true, deletedAt: true },
       }),
     ]);
     if (!practice) {
@@ -542,6 +543,7 @@ export class AvailabilityTemplatesService {
     if (!provider.roles.includes('doctor')) {
       throw new BadRequestException('provider must have the doctor role');
     }
+    assertProviderBookable(provider); // no new schedule for a disabled doctor
     return practice;
   }
 }

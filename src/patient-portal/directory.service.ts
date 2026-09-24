@@ -145,6 +145,8 @@ export class DirectoryService {
       where: {
         practiceId: input.practiceId,
         providerId: input.providerId,
+        // Disabled/removed doctors aren't listed — don't expose their slots via a direct id either.
+        provider: { deletedAt: null, status: 'active' },
         status: 'open',
         startAt: { gte: dayStart, lt: dayEnd },
       },
