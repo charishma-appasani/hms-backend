@@ -7,6 +7,11 @@ import {
 } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { CognitoService } from '../../auth/cognito.service';
+import { throwMappedPrismaError } from '../../common/prisma-errors';
+import {
+  assertPhoneAvailable,
+  IDENTITY_CONFLICT,
+} from '../../common/phone-availability';
 import type { CreatePlatformUserDto } from './dto/platform-user.dto';
 
 /** Identity fields returned for a platform operator (no tenant data — these live above orgs). */
@@ -68,6 +73,7 @@ export class PlatformUsersService {
       return user;
     }
 
+    await assertPhoneAvailable(this.prisma, dto.phone);
     const cognitoSub = await this.cognito.provisionUser({
       email: dto.email,
       firstName: dto.firstName,
@@ -75,19 +81,23 @@ export class PlatformUsersService {
       phone: dto.phone,
     });
     // Upsert on cognito_sub: an unlinked Cognito identity reuses its login instead of failing.
-    const user = await this.prisma.appUser.upsert({
-      where: { cognitoSub },
-      update: { platformRole: dto.platformRole },
-      create: {
-        cognitoSub,
-        firstName: dto.firstName,
-        lastName: dto.lastName,
-        email: dto.email,
-        phone: dto.phone,
-        platformRole: dto.platformRole,
-      },
-      select: OPERATOR_SELECT,
-    });
+    const user = await this.prisma.appUser
+      .upsert({
+        where: { cognitoSub },
+        update: { platformRole: dto.platformRole },
+        create: {
+          cognitoSub,
+          firstName: dto.firstName,
+          lastName: dto.lastName,
+          email: dto.email,
+          phone: dto.phone,
+          platformRole: dto.platformRole,
+        },
+        select: OPERATOR_SELECT,
+      })
+      .catch((err: unknown) =>
+        throwMappedPrismaError(err, { conflict: IDENTITY_CONFLICT }),
+      );
     this.logger.log(
       `Platform operator invited: id=${user.id} role=${dto.platformRole} actor=${actorId}`,
     );

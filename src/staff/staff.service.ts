@@ -10,6 +10,10 @@ import { CognitoService } from '../auth/cognito.service';
 import { AuditService } from '../audit/audit.service';
 import { ImagesService } from '../images/images.service';
 import { throwMappedPrismaError } from '../common/prisma-errors';
+import {
+  assertPhoneAvailable,
+  IDENTITY_CONFLICT,
+} from '../common/phone-availability';
 import { AvailabilityTemplatesService } from '../scheduling/availability-templates/availability-templates.service';
 import type { CreateStaffDto, UpdateStaffDto } from './dto/staff.dto';
 
@@ -330,27 +334,33 @@ export class StaffService {
       return existing.id;
     }
 
+    await assertPhoneAvailable(this.prisma, dto.phone);
     const cognitoSub = await this.cognito.provisionUser({
       email: dto.email,
       phone: dto.phone,
       firstName: dto.firstName,
       lastName: dto.lastName,
     });
-    const user = await this.prisma.appUser.upsert({
-      where: { cognitoSub },
-      update: {}, // identity already exists — don't clobber its demographics
-      create: {
-        cognitoSub,
-        firstName: dto.firstName,
-        lastName: dto.lastName,
-        email: dto.email,
-        phone: dto.phone,
-        status: 'active',
-        updatedByOrg: this.scoped.orgId,
-        updatedByUser: this.scoped.actorId,
-      },
-      select: { id: true },
-    });
+    const user = await this.prisma.appUser
+      .upsert({
+        where: { cognitoSub },
+        update: {}, // identity already exists — don't clobber its demographics
+        create: {
+          cognitoSub,
+          firstName: dto.firstName,
+          lastName: dto.lastName,
+          email: dto.email,
+          phone: dto.phone,
+          status: 'active',
+          updatedByOrg: this.scoped.orgId,
+          updatedByUser: this.scoped.actorId,
+        },
+        select: { id: true },
+      })
+      // Race with a concurrent add of the same phone/email — still a 409, not a 500.
+      .catch((err: unknown) =>
+        throwMappedPrismaError(err, { conflict: IDENTITY_CONFLICT }),
+      );
     return user.id;
   }
 }

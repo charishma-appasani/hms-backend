@@ -4,6 +4,11 @@ import { CognitoService } from '../auth/cognito.service';
 import { OtpService } from '../otp/otp.service';
 import { AuditService } from '../audit/audit.service';
 import { NotificationService } from '../notifications/notification.service';
+import { throwMappedPrismaError } from '../common/prisma-errors';
+import {
+  assertPhoneAvailable,
+  IDENTITY_CONFLICT,
+} from '../common/phone-availability';
 import type {
   OrgSignupStartDto,
   OrgSignupVerifyDto,
@@ -112,6 +117,7 @@ export class OrgSignupService {
     });
     if (existing) return { userId: existing.id, existingAccount: true };
 
+    await assertPhoneAvailable(this.prisma, dto.phone);
     const cognitoSub = await this.cognito.provisionUser({
       email: dto.email,
       phone: dto.phone,
@@ -119,19 +125,23 @@ export class OrgSignupService {
       lastName: dto.lastName,
       password: dto.password, // OTP proved email control → permanent password, no invite email
     });
-    const user = await this.prisma.appUser.upsert({
-      where: { cognitoSub },
-      update: {}, // Cognito user existed without an app_user (drift) — don't clobber
-      create: {
-        cognitoSub,
-        firstName: dto.firstName,
-        lastName: dto.lastName,
-        email: dto.email,
-        phone: dto.phone,
-        status: 'active',
-      },
-      select: { id: true },
-    });
+    const user = await this.prisma.appUser
+      .upsert({
+        where: { cognitoSub },
+        update: {}, // Cognito user existed without an app_user (drift) — don't clobber
+        create: {
+          cognitoSub,
+          firstName: dto.firstName,
+          lastName: dto.lastName,
+          email: dto.email,
+          phone: dto.phone,
+          status: 'active',
+        },
+        select: { id: true },
+      })
+      .catch((err: unknown) =>
+        throwMappedPrismaError(err, { conflict: IDENTITY_CONFLICT }),
+      );
     return { userId: user.id, existingAccount: false };
   }
 
