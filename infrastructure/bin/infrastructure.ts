@@ -26,11 +26,17 @@ const frontendDomainName = app.node.tryGetContext('frontendDomainName') as
 const frontendCertificateArn = app.node.tryGetContext(
   'frontendCertificateArn',
 ) as string | undefined;
+// Cognito invites/forgot-password via our SES (prerequisites: see InfrastructureStack, Cognito):
+//   -c cognitoEmailFrom=no-reply@aayufy.com
+const cognitoEmailFrom = app.node.tryGetContext('cognitoEmailFrom') as
+  | string
+  | undefined;
 
 new InfrastructureStack(app, 'Hms', {
   certificateArn,
   frontendDomainName,
   frontendCertificateArn,
+  cognitoEmailFrom,
   env,
   description: 'HMS infrastructure (backend + frontend hosting)',
 });

@@ -55,7 +55,8 @@ export class CognitoService {
    * default emails the invite + temporary password (FORCE_CHANGE_PASSWORD). If `input.password` is
    * set, the invite is suppressed and a permanent password is set so the user can log in straight
    * away (bootstrap). If the Cognito user already exists (created earlier but never linked to an
-   * app_user), reuses it via AdminGetUser instead of failing.
+   * app_user), reuses it via AdminGetUser instead of failing — and, on the invite path, re-sends the
+   * invite if they never signed in (their old temporary password has likely expired).
    */
   async provisionUser(input: ProvisionUserInput): Promise<string> {
     const attributes: AttributeType[] = [
@@ -94,6 +95,9 @@ export class CognitoService {
           }),
         );
         sub = this.extractSub(res.UserAttributes);
+        if (!input.password && res.UserStatus === 'FORCE_CHANGE_PASSWORD') {
+          await this.resendInvite(sub);
+        }
       } else {
         throw err;
       }
@@ -179,6 +183,35 @@ export class CognitoService {
       );
     }
     return sub;
+  }
+
+  /**
+   * Re-send the staff invite (fresh temporary password, validity window restarted) if the user has
+   * never signed in. Returns false — and sends nothing — once they've set their own password.
+   * `username` may be the `sub` (this pool's real username) or the email alias.
+   */
+  async resendInviteIfPending(username: string): Promise<boolean> {
+    const res = await this.client.send(
+      new AdminGetUserCommand({
+        UserPoolId: this.userPoolId,
+        Username: username,
+      }),
+    );
+    if (res.UserStatus !== 'FORCE_CHANGE_PASSWORD') return false;
+    await this.resendInvite(username);
+    return true;
+  }
+
+  /** AdminCreateUser RESEND: only valid for users still in FORCE_CHANGE_PASSWORD. */
+  private async resendInvite(username: string): Promise<void> {
+    await this.client.send(
+      new AdminCreateUserCommand({
+        UserPoolId: this.userPoolId,
+        Username: username,
+        MessageAction: 'RESEND',
+        DesiredDeliveryMediums: ['EMAIL'],
+      }),
+    );
   }
 
   private extractSub(attributes: AttributeType[] | undefined): string {

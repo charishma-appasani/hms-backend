@@ -218,6 +218,35 @@ export class StaffService {
   }
 
   /**
+   * Email the member a fresh temporary password. Only for people who have never signed in — once
+   * they've set their own password, "Forgot password" on the login screen is the way back in.
+   */
+  async resendInvite(id: string) {
+    const staff = await this.scoped.db.staff.findFirst({
+      where: { id },
+      select: { user: { select: { id: true, cognitoSub: true } } },
+    });
+    if (!staff) throw new NotFoundException('Staff member not found');
+    const sent = await this.cognito.resendInviteIfPending(
+      staff.user.cognitoSub,
+    );
+    if (!sent) {
+      throw new BadRequestException(
+        'This person has already signed in. They can use "Forgot password" to reset it.',
+      );
+    }
+    await this.audit.record({
+      action: 'staff.resend_invite',
+      entityType: 'staff',
+      entityId: id,
+    });
+    this.logger.log(
+      `Staff invite resent: id=${id} user=${staff.user.id} org=${this.scoped.orgId}`,
+    );
+    return { sent };
+  }
+
+  /**
    * An admin can't disable/remove their OWN membership — that would lock them out of the org
    * (and could leave it with no admin). Another admin (or a super_admin) must do it.
    */
@@ -285,9 +314,21 @@ export class StaffService {
   private async resolveAppUser(dto: CreateStaffDto): Promise<string> {
     const existing = await this.prisma.appUser.findFirst({
       where: { email: dto.email },
-      select: { id: true },
+      select: { id: true, cognitoSub: true },
     });
-    if (existing) return existing.id;
+    if (existing) {
+      // Reused identity: no new Cognito user means no automatic invite. If they never signed in,
+      // their temporary password has likely expired — send a fresh one. Best-effort: the
+      // membership still gets created, and the admin can retry via "Resend invite".
+      await this.cognito
+        .resendInviteIfPending(existing.cognitoSub)
+        .catch((err: unknown) =>
+          this.logger.warn(
+            `Invite resend failed for user=${existing.id}: ${String(err)}`,
+          ),
+        );
+      return existing.id;
+    }
 
     const cognitoSub = await this.cognito.provisionUser({
       email: dto.email,

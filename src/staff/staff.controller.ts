@@ -83,6 +83,14 @@ export class StaffController {
     return this.staff.activate(id);
   }
 
+  /** Emails a fresh temporary password to a member who has never signed in. */
+  @Post(':id/resend-invite')
+  @UseGuards(StaffManageGuard)
+  @HttpCode(200)
+  resendInvite(@Param('id', ParseUUIDPipe) id: string) {
+    return this.staff.resendInvite(id);
+  }
+
   /** Upcoming bookings a removal would cancel (for the confirmation dialog). */
   @Get(':id/removal-impact')
   @UseGuards(StaffManageGuard)

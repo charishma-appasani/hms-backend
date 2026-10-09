@@ -12,6 +12,7 @@ import * as iam from 'aws-cdk-lib/aws-iam';
 import * as logs from 'aws-cdk-lib/aws-logs';
 import * as rds from 'aws-cdk-lib/aws-rds';
 import * as s3 from 'aws-cdk-lib/aws-s3';
+import * as cr from 'aws-cdk-lib/custom-resources';
 import { Construct } from 'constructs';
 import { FrontendHosting } from './frontend-hosting';
 
@@ -22,7 +23,21 @@ export interface InfrastructureStackProps extends cdk.StackProps {
   frontendDomainName?: string;
   /** ACM cert ARN for the frontend domain — must be in **us-east-1** (CloudFront requirement). */
   frontendCertificateArn?: string;
+  /**
+   * FROM address for Cognito's own emails (staff invites, forgot-password), e.g.
+   * `no-reply@aayufy.com`. When set, the user pool sends through OUR SES instead of the capped,
+   * spam-prone `no-reply@verificationemail.com`. Prerequisites in {@link COGNITO_SES_REGION} — see
+   * the Cognito section below. Absent ⇒ Cognito's default sender.
+   */
+  cognitoEmailFrom?: string;
 }
+
+/**
+ * SES region Cognito must use. ap-south-2 (Hyderabad) is an "Alternate Region" for Cognito email:
+ * a pool there can only send with a verified identity in ap-south-1 (Mumbai), never in-region.
+ * https://docs.aws.amazon.com/cognito/latest/developerguide/user-pool-email.html
+ */
+const COGNITO_SES_REGION = 'ap-south-1';
 
 /**
  * Durable HMS infrastructure (one account/branch/pipeline per environment).
@@ -36,12 +51,18 @@ export interface InfrastructureStackProps extends cdk.StackProps {
  * -c certificateArn=arn:aws:acm:ap-south-2:201063584490:certificate/7f62cc8c-5d09-491b-a105-05c49cb86a90
  * -c frontendDomainName=dev.aayufy.com
  * -c frontendCertificateArn=arn:aws:acm:us-east-1:201063584490:certificate/41f30053-9152-46f5-9972-23f841cc2a33
+ * -c cognitoEmailFrom=no-reply@aayufy.com
  */
 export class InfrastructureStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props: InfrastructureStackProps) {
     super(scope, id, props);
 
-    const { certificateArn, frontendDomainName, frontendCertificateArn } = props;
+    const {
+      certificateArn,
+      frontendDomainName,
+      frontendCertificateArn,
+      cognitoEmailFrom,
+    } = props;
 
     // ─────────────────────────── ECR ───────────────────────────
     const repository = new ecr.Repository(this, 'HMSRepository', {
@@ -230,6 +251,81 @@ export class InfrastructureStack extends cdk.Stack {
     });
 
     // ─────────────────────── Cognito ───────────────────────
+    // Cognito email via our SES (only when `cognitoEmailFrom` is set). One-time prerequisites in
+    // COGNITO_SES_REGION, done BEFORE deploying with it (sending to unverified addresses fails
+    // AdminCreateUser while the region is in the SES sandbox):
+    //   1. Replica of the domain identity — Deterministic Easy DKIM reuses this region's DKIM
+    //      records, so no new DNS entries:
+    //        aws sesv2 create-email-identity --region ap-south-1 --email-identity aayufy.com \
+    //          --dkim-signing-attributes DomainSigningAttributesOrigin=AWS_SES_AP_SOUTH_2
+    //   2. SES production access in that region (console → SES → Account dashboard).
+    // The sending-authorization policy that lets this pool's Cognito use the identity is managed
+    // below.
+    let cognitoEmail: cognito.UserPoolEmail | undefined;
+    let cognitoSesPolicy: cr.AwsCustomResource | undefined;
+    if (cognitoEmailFrom) {
+      const sesDomain = cognitoEmailFrom.split('@').pop()!;
+      const identityArn = this.formatArn({
+        service: 'ses',
+        region: COGNITO_SES_REGION,
+        resource: 'identity',
+        resourceName: sesDomain,
+      });
+      const policyName = 'cognito-user-pool';
+      // Alternate-Region pools need the REGIONAL Cognito principal. Pool ARN is wildcarded: the
+      // pool depends on this policy, so referencing its ARN would be a cycle.
+      const policy = this.toJsonString({
+        Version: '2012-10-17',
+        Statement: [
+          {
+            Effect: 'Allow',
+            Principal: { Service: `cognito-idp.${this.region}.amazonaws.com` },
+            Action: ['ses:SendEmail', 'ses:SendRawEmail'],
+            Resource: identityArn,
+            Condition: {
+              StringEquals: { 'aws:SourceAccount': this.account },
+              ArnLike: {
+                'aws:SourceArn': `arn:${this.partition}:cognito-idp:${this.region}:${this.account}:userpool/*`,
+              },
+            },
+          },
+        ],
+      });
+      const policyCall = (action: string): cr.AwsSdkCall => ({
+        service: 'SESV2',
+        action,
+        region: COGNITO_SES_REGION,
+        parameters: {
+          EmailIdentity: sesDomain,
+          PolicyName: policyName,
+          ...(action === 'DeleteEmailIdentityPolicy' ? {} : { Policy: policy }),
+        },
+        physicalResourceId: cr.PhysicalResourceId.of(`${sesDomain}/${policyName}`),
+      });
+      cognitoSesPolicy = new cr.AwsCustomResource(this, 'CognitoSesSendingPolicy', {
+        onCreate: policyCall('CreateEmailIdentityPolicy'),
+        onUpdate: policyCall('UpdateEmailIdentityPolicy'),
+        onDelete: policyCall('DeleteEmailIdentityPolicy'),
+        policy: cr.AwsCustomResourcePolicy.fromStatements([
+          new iam.PolicyStatement({
+            actions: [
+              'ses:CreateEmailIdentityPolicy',
+              'ses:UpdateEmailIdentityPolicy',
+              'ses:DeleteEmailIdentityPolicy',
+            ],
+            resources: [identityArn],
+          }),
+        ]),
+        installLatestAwsSdk: false,
+      });
+      cognitoEmail = cognito.UserPoolEmail.withSES({
+        fromEmail: cognitoEmailFrom,
+        fromName: 'Aayufy',
+        sesRegion: COGNITO_SES_REGION,
+        sesVerifiedDomain: sesDomain,
+      });
+    }
+
     // Single shared pool for ALL users. Roles live in our DB (staff.roles / platform_role),
     // NOT in Cognito — so no custom role attributes here.
     const userPool = new cognito.UserPool(this, 'HMSUserPool', {
@@ -250,9 +346,11 @@ export class InfrastructureStack extends cdk.Stack {
         requireSymbols: true,
       },
       accountRecovery: cognito.AccountRecovery.EMAIL_ONLY,
+      email: cognitoEmail, // undefined ⇒ Cognito's default sender
       // RETAIN: losing the pool breaks every cognito_sub → app_user link and forces re-registration.
       removalPolicy: RemovalPolicy.RETAIN,
     });
+    if (cognitoSesPolicy) userPool.node.addDependency(cognitoSesPolicy);
 
     const userPoolClient = userPool.addClient('HMSUserPoolClient', {
       userPoolClientName: 'hms-app',
