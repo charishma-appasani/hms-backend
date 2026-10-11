@@ -328,15 +328,20 @@ export class InfrastructureStack extends cdk.Stack {
 
     // Single shared pool for ALL users. Roles live in our DB (staff.roles / platform_role),
     // NOT in Cognito — so no custom role attributes here.
-    const userPool = new cognito.UserPool(this, 'HMSUserPool', {
+    //
+    // NO required attributes: a person may have only a phone or only an email (each unique, at least
+    // one — enforced by the app), and our DB owns demographics. Required-ness can't be changed on an
+    // existing pool, so this is `HMSUserPoolV2` — the construct id change makes CloudFormation create
+    // a fresh pool (+ client); the old pool is RETAINed and deleted by hand.
+    const userPool = new cognito.UserPool(this, 'HMSUserPoolV2', {
       userPoolName: 'hms-users',
       selfSignUpEnabled: false,
-      signInAliases: { email: true, phone: true }, // staff via email, patients via phone
+      signInAliases: { email: true, phone: true }, // sign in with whichever they have
       standardAttributes: {
-        email: { required: true, mutable: true },
+        email: { required: false, mutable: true },
         phoneNumber: { required: false, mutable: true },
-        givenName: { required: true, mutable: true }, // app_user.firstName
-        familyName: { required: false, mutable: true }, // app_user.lastName is optional
+        givenName: { required: false, mutable: true }, // mirrors app_user.firstName
+        familyName: { required: false, mutable: true },
       },
       passwordPolicy: {
         minLength: 8,
@@ -345,7 +350,8 @@ export class InfrastructureStack extends cdk.Stack {
         requireDigits: true,
         requireSymbols: true,
       },
-      accountRecovery: cognito.AccountRecovery.EMAIL_ONLY,
+      // Forgot-password code by email; SMS for people who have only a phone.
+      accountRecovery: cognito.AccountRecovery.EMAIL_AND_PHONE_WITHOUT_MFA,
       email: cognitoEmail, // undefined ⇒ Cognito's default sender
       // RETAIN: losing the pool breaks every cognito_sub → app_user link and forces re-registration.
       removalPolicy: RemovalPolicy.RETAIN,

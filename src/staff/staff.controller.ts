@@ -4,6 +4,7 @@ import {
   Delete,
   Get,
   HttpCode,
+  Ip,
   Param,
   ParseUUIDPipe,
   Patch,
@@ -15,6 +16,7 @@ import { Roles } from '../auth/roles.decorator';
 import { ZodValidationPipe } from '../common/zod-validation.pipe';
 import { StaffManageGuard } from './staff-manage.guard';
 import { StaffService } from './staff.service';
+import { lookupSchema, type LookupDto } from '../common/contact.schema';
 import {
   createStaffSchema,
   updateStaffSchema,
@@ -40,6 +42,18 @@ const ORG_MEMBER = [
 export class StaffController {
   constructor(private readonly staff: StaffService) {}
 
+  /** Step 1 of adding staff: existing account → OTP sent to them (masked hint returned). */
+  @Post('lookup')
+  @UseGuards(StaffManageGuard)
+  @HttpCode(200)
+  lookup(
+    @Body(new ZodValidationPipe(lookupSchema)) dto: LookupDto,
+    @Ip() ip: string,
+  ) {
+    return this.staff.lookup(dto, ip);
+  }
+
+  /** Step 2: link the existing account (with `code`) or create a new person. */
   @Post()
   @UseGuards(StaffManageGuard)
   create(@Body(new ZodValidationPipe(createStaffSchema)) dto: CreateStaffDto) {

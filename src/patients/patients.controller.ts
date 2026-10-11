@@ -19,19 +19,16 @@ import {
   updatePatientSchema,
   signupStartSchema,
   signupVerifySchema,
-  linkStartSchema,
-  linkVerifySchema,
   createConditionSchema,
   updateConditionSchema,
   type CreatePatientDto,
   type UpdatePatientDto,
   type SignupStartDto,
   type SignupVerifyDto,
-  type LinkStartDto,
-  type LinkVerifyDto,
   type CreateConditionDto,
   type UpdateConditionDto,
 } from './dto/patient.dto';
+import { lookupSchema, type LookupDto } from '../common/contact.schema';
 
 /** Any active member may read the org's patients; front desk / nurses register + edit them. */
 const ORG_MEMBER = [
@@ -67,25 +64,20 @@ export class PatientsController {
     return this.patients.signupVerify(dto);
   }
 
-  // ── cross-org link (org-scoped, OTP consent) ──
-  @Post('link/start')
+  // ── staff-managed (org-scoped) ──
+
+  /** Step 1 of adding a patient: existing account → OTP sent to them (masked hint returned). */
+  @Post('lookup')
   @Roles(...FRONT_DESK)
-  linkStart(
-    @Body(new ZodValidationPipe(linkStartSchema)) dto: LinkStartDto,
+  @HttpCode(200)
+  lookup(
+    @Body(new ZodValidationPipe(lookupSchema)) dto: LookupDto,
     @Ip() ip: string,
   ) {
-    return this.patients.linkStart(dto, ip);
+    return this.patients.lookup(dto, ip);
   }
 
-  @Post('link/verify')
-  @Roles(...FRONT_DESK)
-  linkVerify(
-    @Body(new ZodValidationPipe(linkVerifySchema)) dto: LinkVerifyDto,
-  ) {
-    return this.patients.linkVerify(dto);
-  }
-
-  // ── staff-managed (org-scoped) ──
+  /** Step 2: link the existing account (with `code`) or register a new person. */
   @Post()
   @Roles(...FRONT_DESK)
   create(

@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ConflictException,
   Injectable,
   Logger,
@@ -7,6 +8,7 @@ import {
 import { PrismaService } from '../prisma/prisma.service';
 import { ScopedPrismaService } from '../prisma/scoped-prisma.service';
 import { CognitoService } from '../auth/cognito.service';
+import { IdentityService } from '../auth/identity.service';
 import { OtpService } from '../otp/otp.service';
 import { AuditService, diffFields } from '../audit/audit.service';
 import { ImagesService } from '../images/images.service';
@@ -23,13 +25,12 @@ import type {
 import type {
   CreateConditionDto,
   CreatePatientDto,
-  LinkStartDto,
-  LinkVerifyDto,
   SignupStartDto,
   SignupVerifyDto,
   UpdateConditionDto,
   UpdatePatientDto,
 } from './dto/patient.dto';
+import type { LookupDto } from '../common/contact.schema';
 
 const SIGNUP_PURPOSE = 'patient_signup';
 const LINK_PURPOSE = 'patient_link';
@@ -37,8 +38,9 @@ const LINK_PURPOSE = 'patient_link';
 /**
  * Patients: a global `app_user` identity + `patient` profile, linked to an org via
  * `patient_registration` (per-org UHID). Two creation paths:
- *   - STAFF create (org-scoped): registers a brand-new patient at the current org, provisioning a
- *     Cognito login by phone/email.
+ *   - STAFF add (org-scoped, `lookup` → `createByStaff`): an existing Aayufy account is registered
+ *     here with a consent code the person shares; otherwise a brand-new patient is created,
+ *     provisioning a Cognito login by phone/email.
  *   - SELF signup (public, OTP via OtpService): the patient verifies their phone, sets a password,
  *     and gets an identity + profile (no org yet — they register at an org on first visit).
  */
@@ -53,13 +55,17 @@ export class PatientsService {
     private readonly otp: OtpService,
     private readonly audit: AuditService,
     private readonly images: ImagesService,
+    private readonly identity: IdentityService,
   ) {}
 
   // ───────────────────────── staff ─────────────────────────
 
+  /** Step 2 (after `lookup`): link the existing account with `code`, or register a new person. */
   async createByStaff(dto: CreatePatientDto) {
+    if (dto.code) return this.linkExisting(dto, dto.code);
     const orgId = this.scoped.orgId;
     const actorId = this.scoped.actorId;
+    const firstName = dto.firstName!; // the DTO requires it on the no-code path
     await this.assertUniqueContact(dto.phone, dto.email);
     const org = await this.scoped.db.organization.findFirst({
       where: { id: orgId },
@@ -69,7 +75,7 @@ export class PatientsService {
     // Each person has a unique phone/email → always a real Cognito login.
     const cognitoSub = await this.cognito.provisionPatient({
       phone: dto.phone,
-      firstName: dto.firstName,
+      firstName,
       lastName: dto.lastName,
       email: dto.email,
     });
@@ -80,7 +86,7 @@ export class PatientsService {
           const user = await tx.appUser.create({
             data: {
               cognitoSub,
-              firstName: dto.firstName,
+              firstName,
               lastName: dto.lastName,
               phone: dto.phone,
               email: dto.email,
@@ -455,114 +461,126 @@ export class PatientsService {
     });
   }
 
-  // ─────────────── cross-org link (existing patient → this org) ───────────────
+  // ─────────────── add an existing account (consent code) ───────────────
 
-  /**
-   * Step 1: an existing global patient (found by phone) consents to joining THIS org via an OTP to
-   * their own contact. Rejects if there's no such patient (use staff-create instead) or they're
-   * already registered here. The OTP prefers the patient's email when present.
-   */
-  async linkStart(dto: LinkStartDto, ip: string): Promise<{ sent: boolean }> {
-    const patient = await this.prisma.patient.findFirst({
-      where: { user: { phone: dto.phone } },
-      select: { id: true, user: { select: { email: true, firstName: true } } },
-    });
-    if (!patient) {
-      throw new NotFoundException(
-        'No existing patient with this phone — create a new record instead',
-      );
-    }
-    const already = await this.scoped.db.patientRegistration.findFirst({
-      where: { patientId: patient.id },
-      select: { id: true },
-    });
-    if (already) {
-      throw new ConflictException(
-        'Patient is already registered at this organization',
-      );
-    }
-    await this.otp.request({
-      identifier: dto.phone,
-      phone: dto.phone,
-      email: patient.user.email ?? undefined,
-      name: patient.user.firstName,
-      purpose: LINK_PURPOSE,
-      ip,
-    });
-    return { sent: true };
+  /** A patient consent code is valid only for registering at THIS org. */
+  private get consentScope() {
+    return { scope: this.scoped.orgId, purpose: LINK_PURPOSE };
   }
 
   /**
-   * Step 2: verify the patient's consent OTP, then register them at this org — a new
-   * `patient_registration` (fresh UHID) plus a `consent` row (type org_link, method otp) that the
-   * registration references. The global patient + their demographics are shared, not duplicated.
+   * Step 1 of adding a patient. If the email/phone belongs to an existing Aayufy account (a patient
+   * elsewhere, or staff), sends the person a code to share with the front desk — their consent to
+   * join this org (DPDP) — and returns only a masked hint of where it went. No match → the front
+   * desk fills in a new person.
    */
-  async linkVerify(dto: LinkVerifyDto) {
-    const orgId = this.scoped.orgId;
-    await this.otp.verify({
-      identifier: dto.phone,
-      purpose: LINK_PURPOSE,
-      code: dto.code,
-    });
-
-    const patient = await this.prisma.patient.findFirst({
-      where: { user: { phone: dto.phone } },
-      include: { user: true },
-    });
-    if (!patient) {
-      throw new NotFoundException('No existing patient with this phone');
+  async lookup(dto: LookupDto, ip: string) {
+    const account = await this.identity.findAccount(dto);
+    if (!account) return { match: false as const };
+    if (account.patient) {
+      const already = await this.scoped.db.patientRegistration.findFirst({
+        where: { patientId: account.patient.id },
+        select: { id: true },
+      });
+      if (already) {
+        throw new ConflictException(
+          'Patient is already registered at this organization',
+        );
+      }
     }
-    const already = await this.scoped.db.patientRegistration.findFirst({
-      where: { patientId: patient.id },
-      select: { id: true },
+    const org = await this.scoped.db.organization.findFirst({
+      where: { id: this.scoped.orgId },
+      select: { name: true },
     });
-    if (already) {
-      throw new ConflictException(
-        'Patient is already registered at this organization',
+    const sentTo = await this.identity.sendCode(
+      account,
+      this.consentScope,
+      `${org?.name ?? 'An organization'} wants to register you as a patient on Aayufy.`,
+      ip,
+    );
+    return { match: true as const, sentTo };
+  }
+
+  /**
+   * Step 2 with a code: register the existing account at this org — a `patient` profile if they
+   * don't have one yet (e.g. staff), a new `patient_registration` (fresh UHID), and a `consent`
+   * row (type org_link, method otp) the registration references. Their shared demographics are
+   * neither duplicated nor edited.
+   */
+  private async linkExisting(dto: CreatePatientDto, code: string) {
+    const orgId = this.scoped.orgId;
+    const account = await this.identity.findAccount(dto);
+    if (!account) {
+      throw new BadRequestException(
+        'No account matches these details — start again',
       );
     }
+    await this.identity.verifyCode(account, this.consentScope, code);
 
     const org = await this.scoped.db.organization.findFirst({
       where: { id: orgId },
       select: { uhidFormat: true },
     });
-    const registration = await this.scoped.db.$transaction(async (tx) => {
-      const consent = await tx.consent.create({
-        data: {
+    const { patientId, registration } = await this.scoped.db.$transaction(
+      async (tx) => {
+        const patientId =
+          account.patient?.id ??
+          (await tx.patient.create({ data: { userId: account.id } })).id;
+        const already = await tx.patientRegistration.findFirst({
+          where: { patientId },
+          select: { id: true },
+        });
+        if (already) {
+          throw new ConflictException(
+            'Patient is already registered at this organization',
+          );
+        }
+        const consent = await tx.consent.create({
+          data: {
+            orgId,
+            patientId,
+            type: 'org_link',
+            method: 'otp',
+            reference: dto.phone ?? dto.email,
+            verifiedAt: new Date(),
+          },
+        });
+        const seq = await nextSequence(tx, {
           orgId,
-          patientId: patient.id,
-          type: 'org_link',
-          method: 'otp',
-          reference: dto.phone,
-          verifiedAt: new Date(),
-        },
-      });
-      const seq = await nextSequence(tx, {
-        orgId,
-        scope: 'org',
-        scopeId: orgId,
-        name: 'uhid',
-      });
-      return tx.patientRegistration.create({
-        data: {
-          orgId,
-          patientId: patient.id,
-          uhid: formatUhid(org?.uhidFormat ?? 'UH{seq:08}', seq),
-          status: 'active',
-          consentId: consent.id,
-        },
-      });
-    });
+          scope: 'org',
+          scopeId: orgId,
+          name: 'uhid',
+        });
+        const registration = await tx.patientRegistration.create({
+          data: {
+            orgId,
+            patientId,
+            uhid: formatUhid(org?.uhidFormat ?? 'UH{seq:08}', seq),
+            status: 'active',
+            consentId: consent.id,
+          },
+        });
+        return { patientId, registration };
+      },
+    );
     await this.audit.record({
       action: 'patient.link',
       entityType: 'patient_registration',
       entityId: registration.id,
-      patientId: patient.id,
-      metadata: { uhid: registration.uhid, consentId: registration.consentId },
+      patientId,
+      metadata: {
+        uhid: registration.uhid,
+        consentId: registration.consentId,
+        newProfile: !account.patient,
+      },
     });
     this.logger.log(
-      `Patient linked to org: patientId=${patient.id} uhid=${registration.uhid} org=${orgId} registration=${registration.id}`,
+      `Patient linked to org: patientId=${patientId} uhid=${registration.uhid} org=${orgId} registration=${registration.id}`,
     );
+    const patient = await this.prisma.patient.findUniqueOrThrow({
+      where: { id: patientId },
+      include: { user: true },
+    });
     return toPatientResponse(patient.user, patient, registration, this.images);
   }
 }

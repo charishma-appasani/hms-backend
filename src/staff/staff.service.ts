@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   Injectable,
   Logger,
   NotFoundException,
@@ -7,13 +8,12 @@ import {
 import { PrismaService } from '../prisma/prisma.service';
 import { ScopedPrismaService } from '../prisma/scoped-prisma.service';
 import { CognitoService } from '../auth/cognito.service';
+import { IdentityService } from '../auth/identity.service';
 import { AuditService } from '../audit/audit.service';
 import { ImagesService } from '../images/images.service';
 import { throwMappedPrismaError } from '../common/prisma-errors';
-import {
-  assertPhoneAvailable,
-  IDENTITY_CONFLICT,
-} from '../common/phone-availability';
+import { IDENTITY_CONFLICT } from '../common/phone-availability';
+import type { LookupDto } from '../common/contact.schema';
 import { AvailabilityTemplatesService } from '../scheduling/availability-templates/availability-templates.service';
 import type { CreateStaffDto, UpdateStaffDto } from './dto/staff.dto';
 
@@ -28,10 +28,10 @@ const USER_SELECT = {
 } as const;
 
 /**
- * Staff (org membership) management. `create` owns the whole "add a person to this org" flow in
- * one call: reuse their global app_user if they already exist, else provision a Cognito identity
- * + app_user, then create the membership. The membership row is tenant-scoped (ScopedPrismaService);
- * the app_user is global (unscoped PrismaService).
+ * Staff (org membership) management. Adding a person is two steps: `lookup` (does this email/phone
+ * already have an account? if so, OTP them for consent) then `create` (link that account with the
+ * code, or provision a brand-new Cognito identity + app_user), followed by the membership. The
+ * membership row is tenant-scoped (ScopedPrismaService); the app_user is global (PrismaService).
  */
 @Injectable()
 export class StaffService {
@@ -44,7 +44,13 @@ export class StaffService {
     private readonly audit: AuditService,
     private readonly images: ImagesService,
     private readonly schedules: AvailabilityTemplatesService,
+    private readonly identity: IdentityService,
   ) {}
+
+  /** A staff consent code is valid only for joining THIS org. */
+  private get consentScope() {
+    return { scope: this.scoped.orgId, purpose: 'staff_link' };
+  }
 
   /**
    * Attach the person's presigned avatar URL. The photo hangs off the global app_user, so the
@@ -66,8 +72,69 @@ export class StaffService {
     };
   }
 
+  /**
+   * Step 1 of adding staff. If the email/phone belongs to an existing account, emails/texts the
+   * person a code (they share it with the admin to consent — DPDP) and returns only a masked hint
+   * of where it went, never their details. No match → the admin fills in a new person.
+   */
+  async lookup(dto: LookupDto, ip: string) {
+    const account = await this.identity.findAccount(dto);
+    if (!account) return { match: false as const };
+
+    const member = await this.scoped.db.staff.findFirst({
+      where: { userId: account.id },
+      select: { id: true },
+    });
+    if (member) {
+      throw new ConflictException(
+        'This person is already staff at this organization',
+      );
+    }
+    const org = await this.scoped.db.organization.findFirst({
+      where: { id: this.scoped.orgId },
+      select: { name: true },
+    });
+    const sentTo = await this.identity.sendCode(
+      account,
+      this.consentScope,
+      `${org?.name ?? 'An organization'} wants to add you as staff on Aayufy.`,
+      ip,
+    );
+    return { match: true as const, sentTo };
+  }
+
+  /**
+   * Step 2. With `code`: link the existing account the lookup matched (code proves consent).
+   * Without: create a brand-new person — refused if the contact already belongs to an account.
+   */
   async create(dto: CreateStaffDto) {
-    const userId = await this.resolveAppUser(dto);
+    const account = await this.identity.findAccount(dto);
+    let userId: string;
+    if (dto.code) {
+      if (!account) {
+        throw new BadRequestException(
+          'No account matches these details — start again',
+        );
+      }
+      await this.identity.verifyCode(account, this.consentScope, dto.code);
+      // They may never have signed in (expired temporary password) — send a fresh invite.
+      // Best-effort: the admin can retry with "Resend invite".
+      await this.cognito
+        .resendInviteIfPending(account.cognitoSub)
+        .catch((err: unknown) =>
+          this.logger.warn(
+            `Invite resend failed for user=${account.id}: ${String(err)}`,
+          ),
+        );
+      userId = account.id;
+    } else {
+      if (account) {
+        throw new ConflictException(
+          'This person already has an account — verify them with a code instead',
+        );
+      }
+      userId = await this.provisionNew(dto);
+    }
     const restored = await this.restoreRemoved(userId, dto);
     if (restored) return restored;
     try {
@@ -87,7 +154,11 @@ export class StaffService {
         action: 'staff.create',
         entityType: 'staff',
         entityId: staff.id,
-        metadata: { userId, roles: dto.roles },
+        metadata: {
+          userId,
+          roles: dto.roles,
+          via: dto.code ? 'linked_existing' : 'new_person',
+        },
       });
       this.logger.log(
         `Staff added: id=${staff.id} user=${userId} org=${this.scoped.orgId} roles=[${dto.roles.join(',')}]`,
@@ -302,43 +373,18 @@ export class StaffService {
   }
 
   /**
-   * Resolve the person's ONE global identity, creating it only if truly new. A human is a single
-   * app_user across every org they work at — so the same doctor added at a second hospital reuses
-   * their app_user and Cognito login; only a new `staff` membership is created.
-   *
-   * Dedup is layered so duplicates can't slip through:
-   *   1. Fast path — find the app_user by (normalized) email; reuse it, no Cognito call.
-   *   2. Else provision the Cognito identity. If Cognito already has this login (e.g. they were
-   *      added under a different email, or onboarded elsewhere), AdminCreateUser fails with
-   *      UsernameExistsException and CognitoService returns the EXISTING `sub`.
-   *   3. Upsert the app_user keyed on `cognito_sub` (its unique identity key) — so an existing
-   *      identity links to the one app_user instead of duplicating (no P2002), and a genuinely new
-   *      one is created. Demographics aren't overwritten on reuse (left to the owning org).
+   * Provision a brand-new person (no app_user has this email or phone): Cognito login + invite
+   * (email, else SMS), then the app_user. If Cognito already has the login (an app_user was lost), AdminCreateUser
+   * fails with UsernameExistsException and CognitoService returns the EXISTING `sub` — so the
+   * upsert keyed on `cognito_sub` links it instead of duplicating.
    */
-  private async resolveAppUser(dto: CreateStaffDto): Promise<string> {
-    const existing = await this.prisma.appUser.findFirst({
-      where: { email: dto.email },
-      select: { id: true, cognitoSub: true },
-    });
-    if (existing) {
-      // Reused identity: no new Cognito user means no automatic invite. If they never signed in,
-      // their temporary password has likely expired — send a fresh one. Best-effort: the
-      // membership still gets created, and the admin can retry via "Resend invite".
-      await this.cognito
-        .resendInviteIfPending(existing.cognitoSub)
-        .catch((err: unknown) =>
-          this.logger.warn(
-            `Invite resend failed for user=${existing.id}: ${String(err)}`,
-          ),
-        );
-      return existing.id;
-    }
-
-    await assertPhoneAvailable(this.prisma, dto.phone);
+  private async provisionNew(dto: CreateStaffDto): Promise<string> {
+    // The DTO guarantees a name (and an email or phone) on the no-code path.
+    const firstName = dto.firstName!;
     const cognitoSub = await this.cognito.provisionUser({
       email: dto.email,
       phone: dto.phone,
-      firstName: dto.firstName,
+      firstName,
       lastName: dto.lastName,
     });
     const user = await this.prisma.appUser
@@ -347,7 +393,7 @@ export class StaffService {
         update: {}, // identity already exists — don't clobber its demographics
         create: {
           cognitoSub,
-          firstName: dto.firstName,
+          firstName,
           lastName: dto.lastName,
           email: dto.email,
           phone: dto.phone,

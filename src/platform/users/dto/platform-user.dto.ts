@@ -1,20 +1,32 @@
 import { z } from 'zod';
+import {
+  consentCode,
+  contactFields,
+  contactRequired,
+  hasContact,
+} from '../../../common/contact.schema';
 
 /**
- * Payload for adding a platform operator (our own employee). Mirrors the bootstrap identity shape,
- * but the role is explicit (`super_admin` manages, `support` reads, `data_entry` curates the
- * medicine catalog only) and there is no password path — operators always get the Cognito invite
- * email (FORCE_CHANGE_PASSWORD).
+ * Payload for adding a platform operator (our own employee), step 2 after
+ * `POST /platform/users/lookup`. Two shapes:
+ *   - GRANT to an existing account: contact + `code` (the OTP the person received — their consent).
+ *   - NEW person: contact (email and/or phone) + name. They get the Cognito invite (email, else
+ *     SMS; FORCE_CHANGE_PASSWORD) — there is no password path here.
+ * The role is explicit: `super_admin` manages, `support` reads, `data_entry` curates the medicine
+ * catalog only.
  */
-export const createPlatformUserSchema = z.object({
-  email: z.string().trim().toLowerCase().pipe(z.email().max(160)),
-  firstName: z.string().trim().min(1).max(80),
-  lastName: z.string().trim().min(1).max(80).optional(),
-  phone: z
-    .string()
-    .regex(/^\+[1-9]\d{9,14}$/, 'Phone must be E.164, e.g. +9198XXXXXXXX')
-    .optional(),
-  platformRole: z.enum(['super_admin', 'support', 'data_entry']),
-});
+export const createPlatformUserSchema = z
+  .object({
+    ...contactFields,
+    code: consentCode.optional(),
+    firstName: z.string().trim().min(1).max(80).optional(),
+    lastName: z.string().trim().min(1).max(80).optional(),
+    platformRole: z.enum(['super_admin', 'support', 'data_entry']),
+  })
+  .refine(hasContact, contactRequired)
+  .refine((v) => v.code || v.firstName, {
+    message: 'First name is required for a new person',
+    path: ['firstName'],
+  });
 
 export type CreatePlatformUserDto = z.infer<typeof createPlatformUserSchema>;

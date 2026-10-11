@@ -10,9 +10,9 @@ import {
 } from '@aws-sdk/client-cognito-identity-provider';
 import type { Env } from '../config/env.schema';
 
-/** Demographics needed to provision a login identity for an invited staff member. */
+/** Demographics needed to provision a login identity for an invited staff member (email and/or phone). */
 export interface ProvisionUserInput {
-  email: string;
+  email?: string;
   phone?: string;
   firstName: string;
   lastName?: string;
@@ -52,24 +52,35 @@ export class CognitoService {
 
   /**
    * Creates the Cognito user and returns its immutable `sub` — stored as `app_user.cognito_sub`. By
-   * default emails the invite + temporary password (FORCE_CHANGE_PASSWORD). If `input.password` is
+   * default sends the invite + temporary password (FORCE_CHANGE_PASSWORD) — by email, or by SMS
+   * when there's no email. If `input.password` is
    * set, the invite is suppressed and a permanent password is set so the user can log in straight
    * away (bootstrap). If the Cognito user already exists (created earlier but never linked to an
    * app_user), reuses it via AdminGetUser instead of failing — and, on the invite path, re-sends the
    * invite if they never signed in (their old temporary password has likely expired).
    */
   async provisionUser(input: ProvisionUserInput): Promise<string> {
+    const username = input.email ?? input.phone;
+    if (!username) {
+      throw new Error('provisionUser requires an email or phone');
+    }
     const attributes: AttributeType[] = [
-      { Name: 'email', Value: input.email },
-      { Name: 'email_verified', Value: 'true' }, // admin-invited → trusted
       { Name: 'given_name', Value: input.firstName },
     ];
+    if (input.email) {
+      attributes.push({ Name: 'email', Value: input.email });
+      attributes.push({ Name: 'email_verified', Value: 'true' }); // admin-invited → trusted
+    }
     if (input.lastName) {
       attributes.push({ Name: 'family_name', Value: input.lastName });
     }
     if (input.phone) {
       attributes.push({ Name: 'phone_number', Value: input.phone });
-      attributes.push({ Name: 'phone_number_verified', Value: 'false' });
+      // Trusted only when it's the login (and invite channel); next to an email it's contact info.
+      attributes.push({
+        Name: 'phone_number_verified',
+        Value: input.email ? 'false' : 'true',
+      });
     }
 
     let sub: string;
@@ -77,12 +88,12 @@ export class CognitoService {
       const res = await this.client.send(
         new AdminCreateUserCommand({
           UserPoolId: this.userPoolId,
-          Username: input.email,
+          Username: username,
           UserAttributes: attributes,
-          // With a password we set it ourselves (below) and don't email an invite.
+          // With a password we set it ourselves (below) and don't send an invite.
           ...(input.password
             ? { MessageAction: 'SUPPRESS' }
-            : { DesiredDeliveryMediums: ['EMAIL'] }),
+            : { DesiredDeliveryMediums: [input.email ? 'EMAIL' : 'SMS'] }),
         }),
       );
       sub = this.extractSub(res.User?.Attributes);
@@ -91,12 +102,12 @@ export class CognitoService {
         const res = await this.client.send(
           new AdminGetUserCommand({
             UserPoolId: this.userPoolId,
-            Username: input.email,
+            Username: username,
           }),
         );
         sub = this.extractSub(res.UserAttributes);
         if (!input.password && res.UserStatus === 'FORCE_CHANGE_PASSWORD') {
-          await this.resendInvite(sub);
+          await this.resendInvite(sub, res.UserAttributes);
         }
       } else {
         throw err;
@@ -107,7 +118,7 @@ export class CognitoService {
       await this.client.send(
         new AdminSetUserPasswordCommand({
           UserPoolId: this.userPoolId,
-          Username: input.email,
+          Username: username,
           Password: input.password,
           Permanent: true,
         }),
@@ -198,18 +209,25 @@ export class CognitoService {
       }),
     );
     if (res.UserStatus !== 'FORCE_CHANGE_PASSWORD') return false;
-    await this.resendInvite(username);
+    await this.resendInvite(username, res.UserAttributes);
     return true;
   }
 
-  /** AdminCreateUser RESEND: only valid for users still in FORCE_CHANGE_PASSWORD. */
-  private async resendInvite(username: string): Promise<void> {
+  /**
+   * AdminCreateUser RESEND: only valid for users still in FORCE_CHANGE_PASSWORD. Goes by email when
+   * the user has one, else SMS — the same channel as the original invite.
+   */
+  private async resendInvite(
+    username: string,
+    attributes: AttributeType[] | undefined,
+  ): Promise<void> {
+    const hasEmail = attributes?.some((a) => a.Name === 'email' && a.Value);
     await this.client.send(
       new AdminCreateUserCommand({
         UserPoolId: this.userPoolId,
         Username: username,
         MessageAction: 'RESEND',
-        DesiredDeliveryMediums: ['EMAIL'],
+        DesiredDeliveryMediums: [hasEmail ? 'EMAIL' : 'SMS'],
       }),
     );
   }

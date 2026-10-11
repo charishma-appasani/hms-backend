@@ -158,7 +158,8 @@ POST   /registrations                      register patient at org → issues UH
 GET    /registrations?query=               search within current org (org-scoped)
 
 # Staff & availability (a clinician is a staff member with role 'doctor')
-POST   /staff                              invite/add staff (roles, clinician fields)  [built]
+POST   /staff/lookup                       existing account? → OTP them for consent    [built]
+POST   /staff                              link (with code) or invite new staff        [built]
 POST   /availability-templates             the provider's WEEKLY SCHEDULE at a practice  [built]
        # Whole week in one atomic call: one template per listed weekday (per-day hours, shared
        # mode/capacity), `weeks` (1–8) occurrences each from its first occurrence on/after

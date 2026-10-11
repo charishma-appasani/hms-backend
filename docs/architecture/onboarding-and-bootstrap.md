@@ -8,10 +8,10 @@ How users come to exist in Polaris, from a brand-new instance to a fully populat
 
 | Actor | Stored as | Created by |
 | --- | --- | --- |
-| **Platform operator** (`super_admin` / `support`) | `app_user.platform_role` | Bootstrap (first one) → then `super_admin` via `POST /platform/users` (Cognito invite; reuses an existing app_user's identity). `DELETE /platform/users/:id` revokes the role (not self) |
+| **Platform operator** (`super_admin` / `support`) | `app_user.platform_role` | Bootstrap (first one) → then `super_admin` via `POST /platform/users/lookup` then `POST /platform/users` (the "add a person" flow below: an existing account gets the role only with its consent code; else a Cognito invite). `DELETE /platform/users/:id` revokes the role (not self) |
 | **Organization** (tenant) | `organization` | `super_admin` via `POST /platform/organizations` (approved at creation), **or public OTP self-signup** via `POST /org-signup/*` (awaits approval — see Step 1b) |
-| **Staff** (admin / doctor / nurse / front_desk) | `staff` membership + global `app_user` | `POST /staff` (org admin, or super_admin assuming the org) |
-| **Patient** | `patient` + global `app_user` (+ per-org `patient_registration`) | `POST /patients` (staff), public OTP self-signup, OTP cross-org link, or `POST /me/patient-profile` (an existing staff/operator account activating a patient profile from the account menu — see phase-2-patient-portal.md) |
+| **Staff** (admin / doctor / nurse / front_desk) | `staff` membership + global `app_user` | `POST /staff/lookup` then `POST /staff` (org admin, or super_admin assuming the org) — an existing account is linked only with an OTP the person shares (see Step 1) |
+| **Patient** | `patient` + global `app_user` (+ per-org `patient_registration`) | `POST /patients/lookup` then `POST /patients` (staff — the "add a person" flow below; an existing account, even one with no patient profile yet, is registered with its consent code), public OTP self-signup, or `POST /me/patient-profile` (an existing staff/operator account activating a patient profile from the account menu — see phase-2-patient-portal.md) |
 
 Cognito owns credentials for every login; our DB owns roles/authz. There are **no passwords in our DB**.
 
@@ -60,8 +60,25 @@ Sign in as the super_admin. With no org membership they land in the **platform a
   `X-Org-Id: <newOrgId>`. The super_admin has no membership there, so `OrgContextGuard` grants an
   **assumed** context and `StaffManageGuard` permits the `POST /staff` (audited as `org.assume`). This
   is the only sanctioned cross-tenant action — see `auth-and-authz.md` §2/§4.
-- `POST /staff` provisions the person's Cognito identity (emails an invite, `FORCE_CHANGE_PASSWORD`)
-  and `app_user` if new, then the membership.
+- Adding staff uses the **"add a person" flow** — the same for staff (`/staff`), patients
+  (`/patients`) and platform operators (`/platform/users`), built on `IdentityService` (backend) and
+  the shared `PersonLookup` step (frontend). It is two steps because the person may already have an
+  Aayufy account (a patient, staff at another org, an operator):
+  1. `POST …/lookup { email?, phone? }` (either, or both). Each is unique on its own, so this finds
+     at most one account — or **409** if the email and phone belong to two different people, or the
+     person is already added (staff here / registered here / already an operator). On a match the
+     person is sent a 6-digit code (email if they have one, else SMS) saying who is asking, and the
+     response is only `{ match: true, sentTo }` with a **masked** contact — none of their details
+     are revealed before they consent (DPDP). No match → `{ match: false }`.
+  2. `POST …`: **match** → `{ email?, phone?, code, … }` attaches that account (the code is bound
+     to this org — or the platform — and person; for staff, re-sends the Cognito invite if they
+     never signed in). **No match** → `{ email?, phone?, firstName, … }` creates a new person: a
+     Cognito identity (staff/operators get an invite by email, else SMS, `FORCE_CHANGE_PASSWORD`;
+     patients get none) + `app_user`. Creating a "new" person whose email/phone already has an
+     account → 409.
+  Re-adding a removed member goes through the same code step, then restores their old membership.
+- The user pool has **no required attributes** (`HMSUserPoolV2`), so a person may have only a phone;
+  password recovery goes to email, else SMS.
 
 API equivalent (if scripting instead of using the UI):
 

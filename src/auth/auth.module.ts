@@ -3,6 +3,7 @@ import { APP_GUARD } from '@nestjs/core';
 import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
 import { CognitoService } from './cognito.service';
+import { IdentityService } from './identity.service';
 import { JwtAuthGuard } from './jwt-auth.guard';
 import { OrgContextGuard } from './org-context.guard';
 import { RolesGuard } from './roles.guard';
@@ -21,11 +22,12 @@ import { PlatformRoleGuard } from './platform-roles.guard';
   providers: [
     AuthService,
     CognitoService,
+    IdentityService,
     { provide: APP_GUARD, useClass: JwtAuthGuard },
     { provide: APP_GUARD, useClass: OrgContextGuard },
     { provide: APP_GUARD, useClass: RolesGuard },
     { provide: APP_GUARD, useClass: PlatformRoleGuard },
   ],
-  exports: [AuthService, CognitoService],
+  exports: [AuthService, CognitoService, IdentityService],
 })
 export class AuthModule {}

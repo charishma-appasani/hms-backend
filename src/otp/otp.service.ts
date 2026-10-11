@@ -25,6 +25,8 @@ export interface OtpRequest {
   email?: string; // delivery contact — EMAIL takes precedence when present
   phone?: string; // delivery fallback — SMS when there is no email
   name?: string; // greeting in the message (defaults to a neutral salutation)
+  /** What the code authorizes, prepended to the message — e.g. when the code is read out to staff. */
+  reason?: string;
 }
 
 /**
@@ -54,6 +56,7 @@ export class OtpService {
     email,
     phone,
     name,
+    reason,
   }: OtpRequest): Promise<void> {
     await this.enforceLimits(identifier, purpose, ip);
 
@@ -80,7 +83,7 @@ export class OtpService {
       : { name: name ?? 'there', phone };
     await this.notifications.dispatch(recipient, {
       subject: 'Aayufy verification code',
-      body: `Your Aayufy verification code is ${code}. It expires in 10 minutes.`,
+      body: `${reason ? `${reason} ` : ''}Your Aayufy verification code is ${code}. It expires in 10 minutes.`,
     });
   }
 

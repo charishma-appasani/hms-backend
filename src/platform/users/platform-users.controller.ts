@@ -4,6 +4,7 @@ import {
   Delete,
   Get,
   HttpCode,
+  Ip,
   Param,
   ParseUUIDPipe,
   Post,
@@ -12,6 +13,7 @@ import { PlatformRoles } from '../../auth/platform-roles.decorator';
 import { CurrentUser } from '../../auth/current-user.decorator';
 import type { AuthenticatedUser } from '../../auth/auth.types';
 import { ZodValidationPipe } from '../../common/zod-validation.pipe';
+import { lookupSchema, type LookupDto } from '../../common/contact.schema';
 import { PlatformUsersService } from './platform-users.service';
 import {
   createPlatformUserSchema,
@@ -32,6 +34,18 @@ export class PlatformUsersController {
     return this.users.list();
   }
 
+  /** Step 1 of adding an operator: existing account → OTP sent to them (masked hint returned). */
+  @Post('lookup')
+  @PlatformRoles('super_admin')
+  @HttpCode(200)
+  lookup(
+    @Body(new ZodValidationPipe(lookupSchema)) dto: LookupDto,
+    @Ip() ip: string,
+  ) {
+    return this.users.lookup(dto, ip);
+  }
+
+  /** Step 2: grant the role to the existing account (with `code`) or invite a new person. */
   @Post()
   @PlatformRoles('super_admin')
   create(
